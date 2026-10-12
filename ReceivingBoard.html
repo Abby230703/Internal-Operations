@@ -1,0 +1,180 @@
+<script>
+/* ReceivingBoard.html - Warehouse: goods arrive. Count them, note the damaged pieces, sticker them, then mark them received.
+   A purchase order that was sent already has its goods receipt (GRN) here, "Yet to receive".
+   Received quantity is in SETS in the sheet; type pieces or sets, either one. Damaged is in PIECES.
+   "Fill Received Date only when goods arrive": Mark as received sets the date; Save count keeps a half-finished count. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('warehouse')) return;
+  var LABELS = ['To receive', 'Received', 'All'];
+  var R = { filter: 'To receive', search: '', seq: 0, rows: [], counts: {}, listBox: null, countBox: null, chips: null, drawer: null, body: null, btn: {}, G: null };
+
+  function init(root) {
+    R.chips = App.seg({
+      cls: 'chips-s', label: 'Filter deliveries',
+      options: [{ v: 'To receive', label: LABELS[0] }, { v: 'Received', label: LABELS[1] }, { v: 'All', label: LABELS[2] }], value: R.filter,
+      onChange: function (v) { R.filter = v; load(); }
+    });
+    var search = PW.search('Search GRN, PO, supplier, invoice…', 'Search deliveries', function (v) { R.search = v; load(); });
+    R.countBox = h('div', { class: 'count' }); R.listBox = h('div');
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Receiving' }),
+      h('p', { text: 'Open the delivery, count what arrived, note anything damaged and sticker it. Then mark it received and put it away.' }))));
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Deliveries' }), R.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), R.countBox, R.listBox));
+    var b = R.btn;
+    b.cancel = h('button', { type: 'button', class: 'btn', text: 'Close', onclick: function () { R.drawer.close(); } });
+    b.save = h('button', { type: 'button', class: 'btn', text: 'Save count' });
+    b.recv = h('button', { type: 'button', class: 'btn primary', text: 'Mark as received' });
+    b.save.addEventListener('click', function () { App.run(b.save, function () { return save(false); }); });
+    b.recv.addEventListener('click', function () { App.run(b.recv, function () { return save(true); }); });
+    R.body = h('div');
+    R.drawer = App.drawer({ title: 'Delivery', wide: true, body: R.body, footer: [b.cancel, b.save, b.recv] });
+  }
+
+  // ---------- list ----------
+  function load() {
+    var seq = ++R.seq;
+    R.countBox.textContent = 'Loading…';
+    return Promise.all([App.api('grn.list', { filter: R.filter, search: R.search }), App.products().catch(function () { return null; })]).then(function (res) {
+      var d = res[0];
+      if (seq !== R.seq) return;
+      R.rows = d.rows; R.counts = d.counts;
+      PW.badge('receiving', d.counts.toReceive, 'Deliveries to receive');
+      PW.chipCounts(R.chips, LABELS, [d.counts.toReceive, 0, 0]);
+      R.countBox.textContent = d.shown + (d.shown === 1 ? ' delivery' : ' deliveries') + (R.filter === 'To receive' ? ' expected, soonest first' : '');
+      renderList();
+    }).catch(function (e) { if (seq === R.seq) { R.countBox.textContent = ''; PW.loadError(R.listBox, 'deliveries', e); } });
+  }
+  function renderList() {
+    App.clear(R.listBox);
+    if (!R.rows.length) { R.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: R.filter === 'To receive' ? 'No deliveries are expected right now.' : 'No deliveries found.' }))); return; }
+    var head = h('tr', null, h('th', { text: 'Delivery' }), h('th', { text: 'Supplier' }), h('th', { text: 'Expected by' }), h('th', { class: 'num', text: 'Items' }), h('th', { class: 'num', text: 'Pieces' }),
+      h('th', { text: 'Supplier invoice' }), h('th', { text: 'Status' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+    var body = h('tbody');
+    R.rows.forEach(function (g) {
+      var open = h('button', { type: 'button', class: 'ordno', text: g.no, 'aria-label': 'Open ' + g.no });
+      open.addEventListener('click', function () { openGrn(g.id); });
+      body.appendChild(h('tr', null,
+        h('td', { 'data-l': 'Delivery' }, open, h('span', { class: 'sub', text: g.poNo ? 'PO ' + g.poNo : 'No PO' })),
+        h('td', { 'data-l': 'Supplier', text: g.supplier || '–' }),
+        h('td', { 'data-l': 'Expected by' }, g.delivery ? [App.fmtDate(g.delivery), g.late ? h('span', { class: 'sub late', text: 'Overdue' }) : null] : h('span', { class: 'dash', text: '–' })),
+        h('td', { class: 'num', 'data-l': 'Items', text: String(g.lines) }),
+        h('td', { class: 'num', 'data-l': 'Pieces' }, g.status === 'Received' ? App.fmtQty(g.recPcs) : App.fmtQty(g.expPcs), h('span', { class: 'sub', text: g.status === 'Received' ? 'of ' + App.fmtQty(g.expPcs) + ' ordered' : 'ordered' })),
+        h('td', { 'data-l': 'Invoice' }, g.invoiceNo || h('span', { class: 'dash', text: '–' }), g.invoiceDate ? h('span', { class: 'sub', text: App.fmtDate(g.invoiceDate) }) : null),
+        h('td', { 'data-l': 'Status' }, g.status === 'Received' ? App.badge('Received', 'green') : App.badge('Yet to receive', 'amber'),
+          g.status === 'Received' ? h('span', { class: 'sub', text: App.fmtDate(g.receivedDate) + (g.pending ? ' · ' + g.pending + (g.pending === 1 ? ' line' : ' lines') + ' to put away' : ' · all put away') }) : null),
+        h('td', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm' + (g.status === 'Received' ? '' : ' primary'), text: g.status === 'Received' ? 'View / edit' : 'Receive', onclick: function () { openGrn(g.id); } }))));
+    });
+    R.listBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), body)));
+  }
+
+  // ---------- the count (drawer) ----------
+  function openGrn(id) {
+    return Promise.all([App.api('grn.get', { id: id }), App.products()]).then(function (res) {
+      R.G = { d: res[0], lines: [], extra: [], uid: 0 };
+      render(); R.drawer.open();
+    }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function num(v) { var n = App.num(v); return isNaN(n) ? 0 : n; }
+  function render() {
+    var G = R.G, d = G.d, received = d.status === 'Received';
+    var h2 = R.drawer.el.querySelector('.drawer-h h2'), p = R.drawer.el.querySelector('.drawer-h p');
+    h2.textContent = d.no + (d.poNo ? ' · PO ' + d.poNo : '');
+    if (!p) { p = h('p'); h2.parentNode.appendChild(p); }
+    p.textContent = d.supplier + (d.delivery ? ' · expected ' + App.fmtDate(d.delivery) : '');
+    R.btn.recv.hidden = received; R.btn.save.textContent = received ? 'Save changes' : 'Save count';
+    App.clear(R.body);
+    var f = G.f = {
+      inv: h('input', { class: 'inp', type: 'text', maxlength: 60, value: d.invoiceNo || '', placeholder: 'Number on the supplier’s invoice' }),
+      invDate: h('input', { class: 'inp', type: 'date', value: d.invoiceDate || '' }),
+      cartons: h('input', { class: 'inp', type: 'number', min: 0, step: 1, value: d.cartons || '' }),
+      recDate: h('input', { class: 'inp', type: 'date', value: d.receivedDate || App.today() })
+    };
+    R.body.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '1' }), h('h2', { text: 'Delivery details' })),
+      received ? App.badge('Received ' + App.fmtDate(d.receivedDate), 'green') : App.badge('Yet to receive', 'amber')),
+      h('div', { class: 'grid' }, App.field('Supplier invoice no.', f.inv), App.field('Invoice date', f.invDate), App.field('Cartons received', f.cartons), received ? null : App.field('Received on', f.recDate))));
+    var fill = h('button', { type: 'button', class: 'btn sm soft', text: 'Fill all as ordered', onclick: function () { G.lines.forEach(function (u) { if (!u.L.putAway && !u.q.get() && u.L.expSets > 0) u.q.setSets(u.L.expSets); }); } });
+    G.box = h('div', { class: 'pw-lines' });
+    R.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'Count the goods' })),
+      received ? null : fill), G.box));
+    d.lines.forEach(function (L) { G.box.appendChild(lineCard(L)); });
+    G.extraBox = h('div', { class: 'pw-lines', style: 'margin-top:12px' });
+    R.body.appendChild(h('div', { style: 'margin-top:14px' }, G.extraBox, h('button', { type: 'button', class: 'btn soft', text: '+ Item that was not on the order', onclick: function () { G.extraBox.appendChild(extraCard()); } })));
+  }
+
+  function qtyBits(L, per) {
+    return L.expSets > 0 ? 'Ordered ' + App.fmtQty(L.expSets) + ' sets × ' + App.fmtQty(per) + ' = ' + App.fmtQty(L.expSets * per) + ' pcs' : 'Not on the purchase order';
+  }
+  function lineCard(L) {
+    var G = R.G, u = { L: L };
+    G.lines.push(u);
+    var locked = L.putAway;
+    u.per = h('input', { class: 'inp sm', type: 'number', min: 1, step: 'any', value: L.per, disabled: locked });
+    u.q = App.qty({ cls: 'inp sm', perSet: function () { return num(u.per.value) >= 1 ? num(u.per.value) : 1; } });
+    u.dmg = h('input', { class: 'inp sm', type: 'number', min: 0, step: 'any', value: L.damaged || '', placeholder: '0', disabled: locked });
+    u.stk = PW.check('Stickered', L.stickered, function (on) { u.sq.hidden = !on; if (on && !u.sq.value) u.sq.value = good(u); });
+    u.sq = h('input', { class: 'inp sm pw-n', type: 'number', min: 0, step: 'any', value: L.stickeredQty || '', placeholder: 'Pcs stickered', hidden: !L.stickered, disabled: locked });
+    u.stk.input.disabled = locked;
+    u.per.addEventListener('input', function () { u.q.refresh(); });
+    if (L.recSets !== '' && L.recSets > 0) u.q.setSets(L.recSets);
+    u.q.pcs.disabled = locked; u.q.sets.disabled = locked;
+    if (!L.itemCode) {
+      u.item = App.combo(App.productPicker({ placeholder: 'Pick the item (needed before put-away)', onPick: function (it) { if (!it.free) { u.itemCode = it.code; u.per.value = it.pcs > 0 ? it.pcs : 1; u.q.refresh(); } }, onInput: function () { u.itemCode = ''; } }));
+      if (L.desc) u.item.setText(L.desc);
+    }
+    function cell(label, ctl) { return h('div', null, h('label', { text: label }), ctl); }
+    return h('div', { class: 'line' },
+      h('div', { class: 'pw-head' }, h('div', null, h('b', { text: L.name || 'New item' }), h('div', { class: 'pw-exp', text: (L.itemCode ? L.itemCode + ' · ' : '') + qtyBits(L, L.per) + (L.supItemCode ? ' · supplier code ' + L.supItemCode : '') })),
+        locked ? h('span', { class: 'pw-lock', text: 'Put away to ' + L.location + ' · ' + App.fmtQty(L.putQty) + ' pcs' }) : null),
+      u.item ? h('div', { style: 'margin-top:10px' }, u.item.el) : null,
+      h('div', { class: 'line-nums', style: 'grid-template-columns:repeat(4,minmax(0,1fr));margin-top:12px' }, cell('Pcs / set', u.per), cell('Received pcs', u.q.pcs), cell('or sets', u.q.sets), cell('Damaged pcs', u.dmg)),
+      h('div', { class: 'pw-checks', style: 'padding-top:12px' }, u.stk.el, u.sq));
+  }
+  function good(u) { var q = u.q.get(); return q ? Math.max(0, App.r4(q.pcs - num(u.dmg.value))) : ''; }
+
+  function extraCard() {
+    var u = {}, G = R.G;
+    u.item = App.combo(App.productPicker({ placeholder: 'Item name or code - or type a new item', onPick: function (it) { if (!it.free) { u.itemCode = it.code; u.per.value = it.pcs > 0 ? it.pcs : 1; u.q.refresh(); } else u.itemCode = ''; }, onInput: function () { u.itemCode = ''; } }));
+    u.per = h('input', { class: 'inp sm', type: 'number', min: 1, step: 'any', value: 1 });
+    u.q = App.qty({ cls: 'inp sm', perSet: function () { return num(u.per.value) >= 1 ? num(u.per.value) : 1; } });
+    u.dmg = h('input', { class: 'inp sm', type: 'number', min: 0, step: 'any', placeholder: '0' });
+    u.sup = h('input', { class: 'inp sm', type: 'text', maxlength: 60, placeholder: 'Optional' });
+    u.per.addEventListener('input', function () { u.q.refresh(); });
+    G.extra.push(u);
+    function cell(label, ctl) { return h('div', null, h('label', { text: label }), ctl); }
+    var el = h('div', { class: 'line' },
+      h('div', { class: 'line-top' }, h('div', { class: 'item' }, h('label', { text: 'Item that arrived but was not ordered' }), u.item.el),
+        h('button', { type: 'button', class: 'x rm', 'aria-label': 'Remove', text: '×', onclick: function () { G.extra.splice(G.extra.indexOf(u), 1); el.parentNode.removeChild(el); } })),
+      h('div', { class: 'line-nums', style: 'grid-template-columns:repeat(5,minmax(0,1fr));margin-top:12px' }, cell('Pcs / set', u.per), cell('Received pcs', u.q.pcs), cell('or sets', u.q.sets), cell('Damaged pcs', u.dmg), cell('Supplier code', u.sup)));
+    return el;
+  }
+
+  function save(mark) {
+    var G = R.G, d = G.d, f = G.f;
+    var lines = G.lines.map(function (u) {
+      if (u.L.putAway) return null;
+      var q = u.q.get();
+      return { id: u.L.id, recSets: q ? q.sets : '', per: num(u.per.value), damaged: num(u.dmg.value), stickered: u.stk.get(), stickeredQty: num(u.sq.value), itemCode: u.itemCode || '' };
+    }).filter(Boolean);
+    var extra = G.extra.map(function (u) {
+      var item = u.item.get(), q = u.q.get();
+      if (!item) throw new Error('Pick the extra item, or remove it.');
+      if (!q) throw new Error('Enter the quantity of the extra item ' + item.name + '.');
+      return { itemCode: item.free ? '' : item.code, desc: item.free ? item.name : '', supItemCode: u.sup.value, per: num(u.per.value), recSets: q.sets, damaged: num(u.dmg.value) };
+    });
+    var run = function () {
+      return App.api('grn.receive', { id: d.id, invoiceNo: f.inv.value, invoiceDate: f.invDate.value, cartons: f.cartons.value, receivedDate: f.recDate.value, markReceived: !!mark, lines: lines, newLines: extra }).then(function () {
+        App.toast(mark ? d.no + ' marked as received - now put it away' : 'Saved', 'ok');
+        R.drawer.close(); return load();
+      });
+    };
+    if (!mark) return run();
+    var n = lines.filter(function (l) { return l.recSets !== ''; }).length + extra.length;
+    return App.confirm({ title: 'Mark as received', message: 'The goods have arrived. Mark ' + d.no + ' as received on ' + App.fmtDate(f.recDate.value) + ' (' + n + (n === 1 ? ' item counted' : ' items counted') + ')? It then appears under Put-away.', ok: 'Mark as received' })
+      .then(function (yes) { if (yes) return run(); });
+  }
+
+  App.register('receiving', 'Receiving', { init: init, show: function () { App.refreshLookups(); load(); } });
+})();
+</script>

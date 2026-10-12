@@ -1,0 +1,145 @@
+<script>
+/* DeptShell.html - what the Procurement and Warehouse boards share, loaded right after Client.html.
+   It does NOT change Client.html: it wraps a few of its public functions (App.go, App.icon, App.refreshAttn)
+   and adds PW.* helpers. On the Sales page it does nothing visible. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, noop = function () {};
+  var PW = window.PW = { dept: String(window.DEPT || 'sales').toLowerCase(), label: { sales: 'Sales', procurement: 'Procurement', warehouse: 'Warehouse' } };
+  PW.active = function (d) { return PW.dept === d; };
+
+  // ---------- icons for the new tabs (Client.html only knows the Sales ones) ----------
+  var ICONS = {
+    purchase: [['path', { d: 'M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0' }]],
+    suppliers: [['path', { d: 'M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6' }]],
+    receiving: [['path', { d: 'M22 12h-6l-2 3h-4l-2-3H2M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z' }]],
+    putaway: [['path', { d: 'm12 2 10 5-10 5L2 7zM2 17l10 5 10-5M2 12l10 5 10-5' }]],
+    dispatch: [['path', { d: 'M1 3h15v13H1zM16 8h4l3 3v5h-7z' }], ['circle', { cx: 5.5, cy: 18.5, r: 2.5 }], ['circle', { cx: 18.5, cy: 18.5, r: 2.5 }]],
+    stock: [['path', { d: 'M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7zM3.3 7 12 12l8.7-5M12 22V12' }]],
+    audit: [['path', { d: 'm9 11 3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' }]],
+    truck: [['path', { d: 'M1 3h15v13H1zM16 8h4l3 3v5h-7z' }]],
+    pdf: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5' }]]
+  };
+  var baseIcon = App.icon;
+  App.icon = function (name, size) {
+    var def = ICONS[name];
+    if (!def) return baseIcon(name, size);
+    var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'ico'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
+    if (size) { svg.setAttribute('width', size); svg.setAttribute('height', size); }
+    def.forEach(function (p) {
+      var n = document.createElementNS(ns, p[0]);
+      Object.keys(p[1]).forEach(function (k) { n.setAttribute(k, p[1][k]); });
+      svg.appendChild(n);
+    });
+    return svg;
+  };
+
+  // ---------- breadcrumb: "Procurement / Purchase queue" instead of "Sales / ..." ----------
+  var baseGo = App.go;
+  App.go = function (name, params) {
+    baseGo(name, params);
+    if (PW.dept === 'sales') return;
+    var path = App.byId('path'), b = path && path.querySelector('b');
+    if (b) { App.clear(path).appendChild(document.createTextNode((PW.label[PW.dept] || '') + ' / ')); path.appendChild(b); }
+  };
+
+  // ---------- tab badges ----------
+  /** Show a number bubble on a tab (the three Sales tabs are handled by Client.html itself). */
+  PW.badge = function (name, count, title) {
+    var btn = document.querySelector('#tabs [data-board="' + name + '"]');
+    if (!btn) return;
+    var n = btn.querySelector('.n');
+    if (!n) { n = h('span', { class: 'n' }); btn.appendChild(n); }
+    n.hidden = !(count > 0); n.textContent = count > 0 ? String(count) : '';
+    if (title) n.setAttribute('title', title);
+  };
+  // What "needs attention" means outside Sales (Client.refreshAttn reads Sales tabs, which these roles cannot open)
+  if (PW.dept === 'procurement') {
+    App.refreshAttn = function () {
+      App.api('pq.counts').then(function (d) {
+        App.setAttn('requirements', { awaiting: d.awaiting });          // the existing bubble + bell entry
+        PW.badge('purchase', d.draft, 'Draft purchase orders');
+      }).catch(noop);
+    };
+  } else if (PW.dept === 'warehouse') {
+    App.refreshAttn = function () {
+      var role = App.boot && App.boot.user ? App.boot.user.role : '';
+      if (role === 'Accounts') {
+        App.api('audit.list', { filter: 'Pending' }).then(function (d) { PW.badge('audit', d.counts.pending, 'Counts waiting for review'); }).catch(noop);
+        return;
+      }
+      App.api('wh.counts').then(function (d) {
+        PW.badge('receiving', d.receiving, 'Deliveries to receive');
+        PW.badge('putaway', d.putaway, 'Lines waiting for a location');
+        PW.badge('dispatch', d.dispatch, 'Orders to pick, pack, book or dispatch');
+        PW.badge('audit', d.audit, 'Counts waiting for review');
+      }).catch(noop);
+    };
+  }
+
+  // ---------- shared lookups ----------
+  var supP = null, locP = null;
+  PW.supplierList = null; PW.locationList = null;
+  PW.suppliers = function (force) {
+    if (force || !supP) {
+      var p = App.api('sup.list').then(function (d) { PW.supplierList = d; return d; });
+      supP = p; p.catch(function () { if (supP === p) supP = null; });
+    }
+    return supP;
+  };
+  PW.locations = function () {
+    if (!locP) {
+      var p = App.api('loc.list').then(function (d) { PW.locationList = d; return d; });
+      locP = p; p.catch(function () { if (locP === p) locP = null; });
+    }
+    return locP;
+  };
+  /** Type-ahead settings for a supplier picker */
+  PW.supplierPicker = function (extra) {
+    var o = { placeholder: 'Type a supplier name…', items: function () { return PW.supplierList; }, label: function (s) { return s.name; },
+              sub: function (s) { return s.city || ''; }, none: 'No supplier found - add it on the Suppliers tab', max: 60, noun: 'suppliers' };
+    Object.keys(extra || {}).forEach(function (k) { o[k] = extra[k]; });
+    return o;
+  };
+  /** Type-ahead settings for a location picker. held = { code: pieces } shows what the item already has there. */
+  PW.locationPicker = function (held, extra) {
+    var o = { placeholder: 'Location', items: function () { return PW.locationList; }, label: function (l) { return l.code; },
+              sub: function (l) { return [l.desc, held && held[l.code] ? 'has ' + held[l.code] + ' pcs of this item' : ''].filter(Boolean).join(' · '); },
+              none: 'No such location - check the Locations tab', max: 80, noun: 'locations' };
+    Object.keys(extra || {}).forEach(function (k) { o[k] = extra[k]; });
+    return o;
+  };
+
+  // ---------- small widgets ----------
+  /** <select> from [{v,label}] or strings */
+  PW.select = function (options, value, cls) {
+    var sel = h('select', { class: cls || 'inp sm' });
+    options.forEach(function (o) {
+      var v = typeof o === 'string' ? o : o.v, l = typeof o === 'string' ? o : o.label;
+      sel.appendChild(h('option', { value: v, text: l }));
+    });
+    sel.value = value === undefined || value === null ? '' : value;
+    return sel;
+  };
+  /** Checkbox with a label. Returns { el, get(), set(v), input } */
+  PW.check = function (label, on, onChange) {
+    var cb = h('input', { type: 'checkbox' });
+    cb.checked = !!on;
+    if (onChange) cb.addEventListener('change', function () { onChange(cb.checked); });
+    return { el: h('label', { class: 'pw-check' }, cb, ' ' + label), input: cb, get: function () { return cb.checked; }, set: function (v) { cb.checked = !!v; } };
+  };
+  /** Update the "N things" line + the chip labels with counts: chips = App.seg result, labels = [text, ...] in chip order, counts = [n|null, ...] */
+  PW.chipCounts = function (chips, labels, counts) {
+    Array.prototype.forEach.call(chips.el.children, function (b, i) { b.textContent = labels[i] + (counts[i] ? ' · ' + counts[i] : ''); });
+  };
+  PW.pieces = function (n) { return App.fmtQty(n) + ' pcs'; };
+  /** debounce a search box into load() */
+  PW.search = function (placeholder, label, onChange) {
+    var t = null, box = h('input', { class: 'inp', type: 'search', placeholder: placeholder, 'aria-label': label });
+    box.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { onChange(box.value); }, 300); });
+    return box;
+  };
+  PW.loadError = function (box, what, e) { App.clear(box).appendChild(h('div', { class: 'note err', text: 'Could not load ' + what + ': ' + (e && e.message ? e.message : e) })); };
+})();
+</script>

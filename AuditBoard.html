@@ -1,0 +1,118 @@
+<script>
+/* AuditBoard.html - stock audit. Warehouse: count what is on a shelf when you are free (pieces) and save it.
+   Accounts (and Admin): review each count. Approving makes the ledger match the count (an "Audit adj" line in Stock Movement);
+   rejecting changes nothing. System quantity = what the ledger says is at that location. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('warehouse')) return;
+  var LABELS = ['Pending', 'Approved', 'Rejected', 'All'];
+  var B = { filter: 'Pending', search: '', seq: 0, rows: [], counts: {}, chips: null, listBox: null, countBox: null, f: {} };
+  function role() { return App.boot && App.boot.user ? App.boot.user.role : ''; }
+  function canCount() { return role() === 'Warehouse' || role() === 'Admin'; }
+  function canReview() { return role() === 'Accounts' || role() === 'Admin'; }
+
+  function init(root) {
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Stock audit' }),
+      h('p', { text: canCount() ? 'When you have a free moment: pick a shelf, count what is really there, and save. Accounts reviews every count.' : 'Review the counts the warehouse has made. Approving fixes the stock record.' }))));
+    if (canCount()) root.appendChild(countCard());
+    B.chips = App.seg({
+      cls: 'chips-s', label: 'Filter counts', options: [{ v: 'Pending', label: LABELS[0] }, { v: 'Approved', label: LABELS[1] }, { v: 'Rejected', label: LABELS[2] }, { v: 'All', label: LABELS[3] }],
+      value: B.filter, onChange: function (v) { B.filter = v; load(); }
+    });
+    var search = PW.search('Search item, location, counted by…', 'Search counts', function (v) { B.search = v; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Counts' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+  }
+
+  function countCard() {
+    var f = B.f;
+    f.item = App.combo(App.productPicker({ placeholder: 'Item name or code - or type what you found' }));
+    f.loc = App.combo(PW.locationPicker(null, { placeholder: 'Shelf / location' }));
+    f.qty = h('input', { class: 'inp', type: 'number', min: 0, step: 'any', inputmode: 'decimal', placeholder: 'Pieces counted' });
+    f.file = h('input', { class: 'inp', type: 'file', accept: 'image/*', capture: 'environment' });
+    var save = h('button', { type: 'button', class: 'btn primary', text: 'Save count' });
+    save.addEventListener('click', function () { App.run(save, saveCount); });
+    f.qty.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); save.click(); } });
+    PW.locations().catch(function () { return null; });
+    return h('div', { class: 'card', style: 'padding:20px 24px 22px' }, h('div', { class: 'chead', style: 'margin-bottom:14px' }, h('h2', { text: 'New count' }),
+      h('span', { class: 'mute', style: 'font-size:13px', text: 'Count in pieces. Enter 0 if the shelf is empty.' })),
+      h('div', { class: 'quick', style: 'grid-template-columns:minmax(240px,2fr) minmax(160px,1fr) 140px minmax(160px,1fr) auto' },
+        App.field('Item', f.item.el, { required: true }), App.field('Location', f.loc.el, { required: true }), App.field('Counted (pcs)', f.qty, { required: true }), App.field('Photo (optional)', f.file), save));
+  }
+  function saveCount() {
+    var f = B.f, item = f.item.get(), loc = f.loc.get(), qty = App.num(f.qty.value);
+    if (!item) { f.item.focus(); throw new Error('Pick the item, or type what you found.'); }
+    if (!loc || loc.free) { f.loc.focus(); throw new Error('Pick the location from the list.'); }
+    if (isNaN(qty) || qty < 0) { f.qty.focus(); throw new Error('Enter the counted pieces (0 if empty).'); }
+    var file = f.file.files && f.file.files[0];
+    return (file ? App.readPhoto(file) : Promise.resolve(null)).then(function (photo) {
+      return App.api('audit.create', { itemCode: item.free ? '' : item.code, desc: item.free ? item.name : '', location: loc.code, qty: qty, photo: photo });
+    }).then(function () {
+      App.toast('Count saved - waiting for review', 'ok');
+      f.item.clear(); f.qty.value = ''; f.file.value = ''; f.item.focus();
+      B.filter = 'Pending'; B.chips.set('Pending'); return load();
+    });
+  }
+
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return Promise.all([App.api('audit.list', { filter: B.filter, search: B.search }), App.products().catch(function () { return null; })]).then(function (res) {
+      var d = res[0];
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.counts = d.counts;
+      PW.badge('audit', d.counts.pending, 'Counts waiting for review');
+      PW.chipCounts(B.chips, LABELS, [d.counts.pending, 0, 0, 0]);
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' count' : ' counts');
+      render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'counts', e); } });
+  }
+
+  function review(c, decision) {
+    var verb = decision === 'Approved' ? 'Approve' : 'Reject';
+    var itemPick = null, body;
+    if (decision === 'Approved' && !c.itemCode) itemPick = App.combo(App.productPicker({ placeholder: 'Pick the item this count is for', allowFree: false }));
+    var msg = decision === 'Approved'
+      ? (c.system === null ? 'Approve this count?' : 'Approve this count? The stock record at ' + c.loc + ' goes from ' + App.fmtQty(c.system) + ' to ' + App.fmtQty(c.counted) + ' pcs (' + (c.variance > 0 ? '+' : '') + App.fmtQty(c.variance) + ').')
+      : 'Reject this count? The stock record stays as it is.';
+    body = h('div', null, h('p', { text: c.name + ' at ' + c.loc + ': counted ' + App.fmtQty(c.counted) + ' pcs.' }), h('p', { text: msg }), itemPick ? App.field('Item', itemPick.el, { required: true }) : null);
+    App.modal({
+      title: verb + ' count', body: body,
+      buttons: [{ label: 'Cancel' }, { label: verb, kind: decision === 'Approved' ? 'primary' : 'danger', onclick: function (api, btn) {
+        App.run(btn, function () {
+          var it = itemPick ? itemPick.get() : null;
+          if (itemPick && (!it || it.free)) { itemPick.focus(); throw new Error('Pick the item first.'); }
+          return App.api('audit.review', { id: c.id, decision: decision, itemCode: it ? it.code : '' }).then(function (r) {
+            api.close();
+            App.toast(decision === 'Approved' ? (r.adjusted ? 'Approved - stock adjusted by ' + (r.adjusted > 0 ? '+' : '') + App.fmtQty(r.adjusted) + ' pcs' : 'Approved - the stock already matched') : 'Rejected', 'ok');
+            return load();
+          });
+        });
+      } }]
+    });
+  }
+
+  function render() {
+    var cols = [
+      { h: 'Counted', f: function (c) { return [c.at.slice(0, 10) ? App.fmtDate(c.at.slice(0, 10)) : '', h('span', { class: 'sub', text: (c.at.slice(11) ? c.at.slice(11) + ' · ' : '') + c.by })]; } },
+      { h: 'Item', f: function (c) { return [h('b', { text: c.name || 'Unnamed item' }), c.itemCode ? h('span', { class: 'sub', text: c.itemCode }) : h('span', { class: 'sub late', text: 'No item code yet' })]; } },
+      { h: 'Location', f: function (c) { return c.loc; } },
+      { h: 'Counted', cls: 'num', f: function (c) { return App.fmtQty(c.counted); } },
+      { h: 'System', cls: 'num', f: function (c) { return c.system === null ? h('span', { class: 'dash', text: '–' }) : App.fmtQty(c.system); } },
+      { h: 'Difference', cls: 'num', f: function (c) { return c.variance === null ? h('span', { class: 'dash', text: '–' }) : h('span', { class: c.variance === 0 ? 'pw-pos' : (c.variance < 0 ? 'pw-neg' : 'late'), text: c.variance === 0 ? 'matches' : (c.variance > 0 ? '+' : '') + App.fmtQty(c.variance) }); } },
+      { h: 'Photo', f: function (c) { return c.photo ? h('a', { href: c.photo, target: '_blank', rel: 'noopener', text: 'View' }) : (c.hasPhoto ? 'On file' : h('span', { class: 'dash', text: '–' })); } },
+      { h: 'Status', f: function (c) { return [App.badge(c.status, c.status === 'Approved' ? 'green' : (c.status === 'Rejected' ? 'red' : 'amber')), c.reviewedBy ? h('span', { class: 'sub', text: c.reviewedBy + (c.reviewedOn ? ' · ' + App.fmtShort(c.reviewedOn) : '') }) : null]; } },
+      { h: '', cls: 'acts', f: function (c) {
+          if (c.status !== 'Pending' || !canReview()) return '';
+          return [h('button', { type: 'button', class: 'btn sm primary', text: 'Approve', onclick: function () { review(c, 'Approved'); } }), ' ',
+                  h('button', { type: 'button', class: 'btn sm danger', text: 'Reject', onclick: function () { review(c, 'Rejected'); } })];
+        } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, B.rows, B.filter === 'Pending' ? 'No counts are waiting for review.' : 'No counts found.'));
+  }
+
+  App.register('audit', 'Stock audit', { init: init, show: function () { App.refreshLookups(); PW.locations().catch(function () { return null; }); load(); } });
+})();
+</script>

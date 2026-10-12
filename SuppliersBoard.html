@@ -1,0 +1,71 @@
+<script>
+/* SuppliersBoard.html - Procurement: the supplier list. Other tables store the Supplier ID, never the name. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('procurement')) return;
+  var B = { f: {}, rows: [], search: '', seq: 0, editId: '', listBox: null, countBox: null, title: null, saveBtn: null, cancelBtn: null };
+  var FIELDS = [
+    ['name', 'Company name', 'text', 120, true], ['contact', 'Contact person', 'text', 80], ['whatsapp', 'WhatsApp / phone', 'tel', 30], ['email', 'Email', 'email', 120],
+    ['gstin', 'GSTIN', 'text', 15], ['city', 'City', 'text', 60], ['address', 'Address', 'text', 200], ['categories', 'Products they supply', 'text', 200]
+  ];
+
+  function init(root) {
+    var f = B.f;
+    FIELDS.forEach(function (d) { f[d[0]] = h('input', { class: 'inp', type: d[2], maxlength: d[3] }); });
+    B.saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Save supplier' });
+    B.cancelBtn = h('button', { type: 'button', class: 'btn', text: 'Cancel edit', hidden: true, onclick: reset });
+    B.saveBtn.addEventListener('click', function () { App.run(B.saveBtn, save); });
+    B.title = h('h2', { text: 'Add a supplier' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Suppliers' }), h('p', { text: 'The companies you buy from. Pick one on a purchase order.' }))));
+    root.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, B.title),
+      h('div', { class: 'grid' }, FIELDS.map(function (d) { return App.field(d[1], f[d[0]], { required: !!d[4], cls: d[0] === 'address' || d[0] === 'categories' ? 'span2' : '' }); })),
+      h('div', { class: 'actions' }, B.saveBtn, B.cancelBtn)));
+    var search = PW.search('Search name, city, contact…', 'Search suppliers', function (v) { B.search = v; render(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'All suppliers' }), h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+  }
+  function reset() {
+    B.editId = ''; Object.keys(B.f).forEach(function (k) { B.f[k].value = ''; });
+    B.title.textContent = 'Add a supplier'; B.saveBtn.textContent = 'Save supplier'; B.cancelBtn.hidden = true;
+  }
+  function edit(s) {
+    B.editId = s.id; Object.keys(B.f).forEach(function (k) { B.f[k].value = s[k] || ''; });
+    B.title.textContent = 'Edit ' + s.name; B.saveBtn.textContent = 'Save changes'; B.cancelBtn.hidden = false;
+    B.f.name.focus(); window.scrollTo(0, 0);
+  }
+  function save() {
+    var f = B.f, p = { id: B.editId };
+    if (!f.name.value.trim()) { f.name.focus(); throw new Error('Enter the supplier company name.'); }
+    Object.keys(f).forEach(function (k) { p[k] = f[k].value; });
+    return App.api('sup.save', p).then(function () {
+      App.toast('Supplier saved: ' + f.name.value.trim(), 'ok'); reset(); PW.suppliers(true).catch(function () { return null; }); return load();
+    });
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('sup.list').then(function (rows) {
+      if (seq !== B.seq) return;
+      B.rows = rows; render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'suppliers', e); } });
+  }
+  function render() {
+    var rows = B.rows.filter(function (s) { var q = B.search.toLowerCase(); return !q || [s.name, s.city, s.contact, s.categories].join(' ').toLowerCase().indexOf(q) >= 0; });
+    B.countBox.textContent = rows.length + (rows.length === 1 ? ' supplier' : ' suppliers');
+    var cols = [
+      { h: 'Supplier', f: function (s) { return h('div', { class: 'who2' }, h('i', { text: App.initials(s.name) }), h('div', null, h('b', { text: s.name }), h('span', { class: 'sub', text: [s.contact, s.city].filter(Boolean).join(' · ') }))); } },
+      { h: 'Phone', f: function (s) { return s.whatsapp ? h('a', { href: 'tel:' + String(s.whatsapp).replace(/[^0-9+]/g, ''), text: s.whatsapp }) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Email', f: function (s) { return s.email ? h('a', { href: 'mailto:' + s.email, text: s.email }) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'GSTIN', f: function (s) { return s.gstin || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Supplies', f: function (s) { return h('div', { class: 'clip', title: s.categories, text: s.categories }); } },
+      { h: 'POs', cls: 'num', f: function (s) { return s.pos ? String(s.pos) : h('span', { class: 'dash', text: '0' }); } },
+      { h: '', cls: 'acts', f: function (s) { return h('button', { type: 'button', class: 'btn sm', text: 'Edit', onclick: function () { edit(s); } }); } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, rows, 'No suppliers yet. Add one above.'));
+  }
+
+  App.register('suppliers', 'Suppliers', { init: init, show: function () { load(); } });
+})();
+</script>

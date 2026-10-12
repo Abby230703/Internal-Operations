@@ -1,0 +1,96 @@
+<script>
+/* StockBoard.html - Warehouse: what is on the shelves. READ-ONLY: Stock Movement is only ever written by put-away,
+   dispatch and an approved audit count. "Books" is Tally's closing stock; "Warehouse" is the sum of the ledger. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('warehouse')) return;
+  var LABELS = ['In warehouse', 'Books ≠ warehouse', 'Short for orders', 'All items'];
+  var B = { filter: 'In warehouse', search: '', seq: 0, rows: [], counts: {}, nextCode: '', chips: null, listBox: null, countBox: null, drawer: null, f: {} };
+
+  function init(root) {
+    B.chips = App.seg({
+      cls: 'chips-s', label: 'Filter stock',
+      options: [{ v: 'In warehouse', label: LABELS[0] }, { v: 'Mismatch', label: LABELS[1] }, { v: 'Short', label: LABELS[2] }, { v: 'All', label: LABELS[3] }],
+      value: B.filter, onChange: function (v) { B.filter = v; load(); }
+    });
+    var search = PW.search('Search item, code, group, location…', 'Search stock', function (v) { B.search = v; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    var newBtn = h('button', { type: 'button', class: 'btn' }, App.icon('plus', 16), 'New item');
+    newBtn.addEventListener('click', function () { B.drawer.open(); });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Stock' }),
+      h('p', { text: 'What is on the shelves, and where. This list is read-only: stock changes only through put-away, dispatch and approved audit counts.' })), h('div', { class: 'acts' }, newBtn)));
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Items' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+    buildDrawer();
+  }
+
+  function buildDrawer() {
+    var f = B.f;
+    f.code = h('input', { class: 'inp', type: 'text', maxlength: 30 }); f.name = h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'As it appears in Tally' });
+    f.pcs = h('input', { class: 'inp', type: 'number', min: 1, step: 'any', value: 1 }); f.group = h('input', { class: 'inp', type: 'text', maxlength: 60, placeholder: 'Uncategorised' });
+    f.gst = h('input', { class: 'inp', type: 'number', min: 0, max: 100, step: 'any', placeholder: 'e.g. 18' });
+    var save = h('button', { type: 'button', class: 'btn primary', text: 'Add item' });
+    save.addEventListener('click', function () {
+      App.run(save, function () {
+        if (!f.code.value.trim()) { f.code.focus(); throw new Error('Enter the item code.'); }
+        if (!f.name.value.trim()) { f.name.focus(); throw new Error('Enter the item name.'); }
+        return App.api('prod.create', { code: f.code.value, name: f.name.value, pcs: f.pcs.value, group: f.group.value, gst: f.gst.value }).then(function () {
+          App.toast('Item ' + f.code.value + ' added to Products', 'ok');
+          ['code', 'name', 'group', 'gst'].forEach(function (k) { f[k].value = ''; }); f.pcs.value = 1; B.drawer.close();
+          return App.products(true).then(load);
+        });
+      });
+    });
+    B.drawer = App.drawer({
+      title: 'New item', sub: 'For goods that are not in Products yet, so they can be put away. Prices and the catalog name are filled in by Sales / Admin.',
+      body: h('div', null, App.field('Item code', f.code, { required: true, hint: h('div', { class: 'hint', text: 'Next free number: ' }) }), App.field('Item name', f.name, { required: true }),
+        h('div', { class: 'grid' }, App.field('Pcs per set', f.pcs), App.field('GST %', f.gst)), App.field('Stock group', f.group)),
+      footer: [save, h('button', { type: 'button', class: 'btn', text: 'Cancel', onclick: function () { B.drawer.close(); } })],
+      onopen: function () { if (!f.code.value) f.code.value = B.nextCode; setTimeout(function () { f.name.focus(); }, 30); }
+    });
+  }
+
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return Promise.all([App.api('stock.list', { filter: B.filter, search: B.search }), App.products().catch(function () { return null; })]).then(function (res) {
+      var d = res[0];
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.counts = d.counts; B.nextCode = d.nextCode;
+      PW.chipCounts(B.chips, LABELS, [d.counts.inWh, d.counts.mismatch, d.counts.short, 0]);
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' item' : ' items') + (d.shown > d.rows.length ? ' - showing the first ' + d.rows.length + ', search to narrow down' : '');
+      render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'stock', e); } });
+  }
+  function history(r) {
+    return App.api('stock.history', { code: r.code }).then(function (d) {
+      var cols = [
+        { h: 'When', f: function (m) { return m.at; } }, { h: 'Type', f: function (m) { return m.type; } },
+        { h: 'Location', f: function (m) { return m.loc; } },
+        { h: 'Pieces', cls: 'num', f: function (m) { return h('span', { class: m.qty < 0 ? 'pw-neg' : 'pw-pos', text: (m.qty > 0 ? '+' : '') + App.fmtQty(m.qty) }); } },
+        { h: 'By', f: function (m) { return m.by; } }
+      ];
+      App.modal({ title: d.name + ' · ' + d.code, wide: true, body: h('div', { class: 'pw-ledger' }, App.table(cols, d.rows, 'Nothing has been recorded for this item yet.'),
+        d.total > d.rows.length ? h('p', { class: 'pw-note', text: 'Showing the latest ' + d.rows.length + ' of ' + d.total + ' movements.' }) : null), buttons: [{ label: 'Close' }] });
+    });
+  }
+  function render() {
+    var cols = [
+      { h: 'Item', f: function (r) { return [h('b', { text: r.name || r.code }), h('span', { class: 'sub', text: r.code + (r.group ? ' · ' + r.group : '') })]; } },
+      { h: 'Pcs / set', cls: 'num', f: function (r) { return String(r.pcs); } },
+      { h: 'Books (Tally)', cls: 'num', f: function (r) { return App.fmtQty(r.books); } },
+      { h: 'Warehouse', cls: 'num', f: function (r) { var diff = Math.abs(r.books - r.wh) > 0.5 && (r.books > 0 || r.wh !== 0); return h('span', { class: diff ? 'late' : '', text: App.fmtQty(r.wh) }); } },
+      { h: 'Reserved', cls: 'num', f: function (r) { return r.reserved ? App.fmtQty(r.reserved) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'On order', cls: 'num', f: function (r) { return r.onOrder ? App.fmtQty(r.onOrder) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Available', cls: 'num', f: function (r) { return r.avail === '' ? '' : h('span', { class: r.avail < 0 ? 'late' : '', text: App.fmtQty(r.avail) }); } },
+      { h: 'Where', f: function (r) { return r.locs.length ? h('div', { class: 'pw-locs' }, r.locs.map(function (l) { return h('span', { class: 'pw-chip' }, l.loc, h('i', { text: App.fmtQty(l.qty) })); })) : h('span', { class: 'dash', text: 'not located' }); } },
+      { h: '', cls: 'acts', f: function (r) { return h('button', { type: 'button', class: 'btn sm link', text: 'History', onclick: function (e) { App.run(e.currentTarget, function () { return history(r); }); } }); } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, B.rows, B.filter === 'In warehouse' ? 'Nothing has been put away yet.' : 'No items match.'));
+    var hint = B.drawer.el.querySelector('.hint'); if (hint) hint.textContent = 'Next free number: ' + B.nextCode;
+  }
+
+  App.register('stock', 'Stock', { init: init, show: function () { App.refreshLookups(); load(); } });
+})();
+</script>

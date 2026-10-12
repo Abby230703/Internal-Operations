@@ -1,0 +1,202 @@
+<script>
+/* DispatchBoard.html - Warehouse: an order has reached us. Pick it, pack it, book the transport, dispatch it.
+   The order's stage is the sheet's own: To pick -> To pack -> Book transport -> Ready to dispatch -> Dispatched.
+   Dispatching writes a minus line to the stock ledger (Stock Movement) for each shipped line and can be done in parts. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('warehouse')) return;
+  var STAGES = ['To pick', 'To pack', 'Book transport', 'Ready to dispatch'];
+  var STEP = { 'To pick': 1, 'To pack': 2, 'Book transport': 3, 'Ready to dispatch': 4, 'Dispatched': 5 };
+  var D = { filter: 'Open', search: '', stage: '', seq: 0, rows: [], stages: {}, sel: '', detail: null, ui: null, listBox: null, countBox: null, strip: null, md: null, panel: null, panelBox: null };
+
+  function init(root) {
+    var search = PW.search('Search order number or customer…', 'Search orders', function (v) { D.search = v; load(); });
+    D.strip = h('div', { class: 'stg', role: 'group', 'aria-label': 'Filter orders by stage' });
+    D.countBox = h('div', { class: 'count' }); D.listBox = h('div');
+    D.panelBox = h('div'); D.panel = h('aside', { class: 'dp', 'aria-label': 'Order details', hidden: true }, D.panelBox);
+    D.md = h('div', { class: 'md' }, h('div', null, D.listBox), D.panel);
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Dispatch' }),
+      h('p', { text: 'Orders from Sales, in the order they must move: pick, pack, book the transport, then dispatch.' }))));
+    root.appendChild(D.strip);
+    root.appendChild(h('div', null, h('div', { class: 'toolbar', style: 'margin-bottom:6px' }, h('h2', { text: 'Orders' }), h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), D.countBox, D.md));
+  }
+
+  // ---------- list ----------
+  function load() {
+    var seq = ++D.seq;
+    D.countBox.textContent = 'Loading…';
+    return Promise.all([App.api('disp.list', { filter: D.filter, search: D.search }), PW.locations(), App.products().catch(function () { return null; })]).then(function (res) {
+      var d = res[0];
+      if (seq !== D.seq) return;
+      D.rows = d.rows; if (D.filter === 'Open' && !D.search) D.stages = d.stages;
+      var open = 0; Object.keys(D.stages).forEach(function (k) { open += D.stages[k]; });
+      PW.badge('dispatch', open, 'Orders to pick, pack, book or dispatch');
+      renderStrip(); renderList();
+      if (D.sel) openOrder(D.sel, true);
+    }).catch(function (e) { if (seq === D.seq) { D.countBox.textContent = ''; PW.loadError(D.listBox, 'orders', e); } });
+  }
+  function renderStrip() {
+    var total = 0; Object.keys(D.stages).forEach(function (k) { total += D.stages[k]; });
+    App.clear(D.strip);
+    function card(label, n, on, click, big) {
+      var b = h('button', { type: 'button', class: on ? 'on' : '', 'aria-pressed': on ? 'true' : 'false' },
+        h('div', { class: 'bar2' }, h('i', { style: 'width:' + (total && n !== null ? Math.round(n / total * 100) : 0) + '%' })), h('small', { text: label }), h('b', { text: big || String(n) }), h('span', { text: ' ' }));
+      b.addEventListener('click', click); D.strip.appendChild(b);
+    }
+    var hist = D.filter === 'Dispatched';
+    card('All open', total, !hist && !D.stage, function () { D.filter = 'Open'; D.stage = ''; load(); });
+    STAGES.forEach(function (s) { card(s, D.stages[s] || 0, !hist && D.stage === s, function () { var was = D.filter !== 'Open'; D.filter = 'Open'; D.stage = s; if (was) load(); else { renderStrip(); renderList(); } }); });
+    card('Dispatched', null, hist, function () { D.filter = 'Dispatched'; D.stage = ''; load(); }, 'History');
+  }
+  function shown() { return D.rows.filter(function (o) { return !D.stage || o.stage === D.stage; }); }
+  function stageBadge(s) { return App.badge(s, s === 'Dispatched' ? 'green' : (s === 'Ready to dispatch' ? 'blue' : (s === 'Cancelled' ? 'red' : 'amber'))); }
+  function renderList() {
+    var rows = shown();
+    D.countBox.textContent = rows.length + (rows.length === 1 ? ' order' : ' orders') + (D.stage ? ' at ' + D.stage : '');
+    App.clear(D.listBox);
+    if (!rows.length) { D.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: D.filter === 'Open' ? 'No orders are waiting for the warehouse.' : 'No orders found.' }))); return; }
+    var head = h('tr', null, h('th', { text: 'Order' }), h('th', { text: 'Customer' }), h('th', { text: 'Progress' }), h('th', { text: 'Transport' }), h('th', null, h('span', { class: 'sr', text: 'Open' })));
+    var body = h('tbody');
+    rows.forEach(function (o) {
+      var n = STEP[o.stage] || 1, bars = [];
+      for (var i = 1; i <= 4; i++) bars.push(h('i', { class: i <= n ? 'on' : '' }));
+      var no = h('button', { type: 'button', class: 'ordno', text: o.no, 'aria-label': 'Open ' + o.no });
+      no.addEventListener('click', function () { D.sel = o.id; openOrder(o.id); });
+      var tr = h('tr', { class: 'click' + (D.sel === o.id ? ' sel' : ''), 'data-id': o.id },
+        h('td', { 'data-l': 'Order' }, no, h('span', { class: 'sub', text: App.fmtDate(o.date) })),
+        h('td', { 'data-l': 'Customer' }, o.customer || '–', h('span', { class: 'sub', text: o.lines + (o.lines === 1 ? ' item' : ' items') + (o.delivery ? ' · ' + o.delivery : '') })),
+        h('td', { 'data-l': 'Progress' }, o.stage === 'Dispatched' || o.stage === 'Cancelled' ? stageBadge(o.stage) : [h('div', { class: 'stp', 'aria-hidden': 'true' }, bars), h('span', { class: 'stl', text: o.stage })],
+          o.lines ? h('span', { class: 'sub', text: o.picked + '/' + o.lines + ' picked · ' + o.packed + '/' + o.lines + ' packed' }) : null),
+        h('td', { 'data-l': 'Transport' }, o.booked ? [o.transporter || 'Booked', o.lr ? h('span', { class: 'sub', text: 'LR ' + o.lr }) : null] : h('span', { class: 'dash', text: 'not booked' })),
+        h('td', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm' + (o.stage === 'Dispatched' ? '' : ' primary'), text: o.stage === 'Dispatched' ? 'View' : 'Open', onclick: function () { D.sel = o.id; openOrder(o.id); } })));
+      tr.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('button,a')) return; D.sel = o.id; openOrder(o.id); });
+      body.appendChild(tr);
+    });
+    D.listBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), body)));
+  }
+
+  // ---------- the order panel ----------
+  function openOrder(id, quiet) {
+    D.sel = id;
+    Array.prototype.forEach.call(D.listBox.querySelectorAll('tr.click'), function (tr) { tr.classList.toggle('sel', tr.getAttribute('data-id') === id); });
+    D.panel.hidden = false; D.md.classList.add('has-panel');
+    if (!quiet) App.clear(D.panelBox).appendChild(h('div', { class: 'dp-b', text: 'Loading…' }));
+    return App.api('disp.get', { orderId: id }).then(function (d) { if (D.sel === id) renderPanel(d); }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function closePanel() { D.sel = ''; D.panel.hidden = true; D.md.classList.remove('has-panel'); renderList(); }
+  function num(v) { var n = App.num(v); return isNaN(n) ? 0 : n; }
+
+  function renderPanel(d) {
+    D.detail = d; D.ui = { lines: {} };
+    var closed = d.stage === 'Dispatched' || d.stage === 'Cancelled', n = STEP[d.stage] || 1;
+    var steps = h('div', { class: 'pw-steps' }, ['Pick', 'Pack', 'Book transport', 'Dispatch'].map(function (s, i) {
+      return h('span', { class: closed && d.stage === 'Dispatched' ? 'done' : (i + 1 < n ? 'done' : (i + 1 === n ? 'now' : '')), text: s });
+    }));
+    var lines = h('div', { class: 'pw-lines' }, d.lines.map(function (l) { return lineCard(l, d); }));
+    var tr = h('input', { class: 'inp', type: 'text', maxlength: 80, value: d.transporter || '', placeholder: 'Transporter / courier', disabled: closed });
+    var lr = h('input', { class: 'inp', type: 'text', maxlength: 60, value: d.lr || '', placeholder: 'LR / docket no. (when you have it)', disabled: closed });
+    var dt = h('input', { class: 'inp', type: 'date', value: App.today(), disabled: closed });
+    D.ui.tr = tr; D.ui.lr = lr; D.ui.dt = dt;
+    var transport = h('div', null, h('div', { class: 'lbl', style: 'margin-bottom:8px', text: 'Transport' }),
+      h('div', { class: 'grid', style: 'grid-template-columns:1fr' }, App.field('Transporter', tr), App.field('LR no.', lr), d.booked && !closed ? App.field('Dispatch date', dt) : null),
+      d.booked ? h('div', { class: 'hint', text: 'Transport is booked. Tick the sets to send and press Dispatch.' }) : null);
+    var foot = h('div', { class: 'dp-f' });
+    if (!closed) {
+      var saveBtn = h('button', { type: 'button', class: 'btn sm', text: 'Save pick & pack' });
+      saveBtn.addEventListener('click', function () { App.run(saveBtn, function () { return saveFlags().then(function (r) { toastWarn(r); App.toast('Saved', 'ok'); return refresh(); }); }); });
+      foot.appendChild(saveBtn);
+      if (!d.booked) {
+        var bookBtn = h('button', { type: 'button', class: 'btn sm primary', text: 'Book transport' });
+        bookBtn.addEventListener('click', function () { App.run(bookBtn, book); });
+        foot.appendChild(bookBtn);
+      } else {
+        var shipBtn = h('button', { type: 'button', class: 'btn sm primary', text: 'Dispatch' });
+        shipBtn.addEventListener('click', function () { App.run(shipBtn, dispatch); });
+        foot.appendChild(shipBtn);
+        if (!d.lines.some(function (l) { return l.dispatchedSets > 0; })) {
+          var unBtn = h('button', { type: 'button', class: 'btn sm', text: 'Change booking' });
+          unBtn.addEventListener('click', function () { App.run(unBtn, unbook); });
+          foot.appendChild(unBtn);
+        }
+      }
+    }
+    App.clear(D.panelBox).appendChild(h('div', null,
+      h('div', { class: 'dp-h' }, h('div', null, h('div', { class: 'kk', text: 'Order' }), h('h3', { text: d.no }), h('div', { class: 'pw-note', text: d.customer + (d.delivery ? ' · ' + d.delivery : '') })),
+        h('div', { style: 'display:flex;gap:8px;align-items:center' }, stageBadge(d.stage), h('button', { type: 'button', class: 'x', 'aria-label': 'Close details', onclick: closePanel }, App.icon('close', 18)))),
+      h('div', { class: 'dp-b' }, steps, lines, closed ? null : transport,
+        closed && d.stage === 'Dispatched' ? h('div', { class: 'note', text: 'Dispatched' + (d.dispatchDate ? ' on ' + App.fmtDate(d.dispatchDate) : '') + (d.transporter ? ' with ' + d.transporter : '') + (d.lr ? ' · LR ' + d.lr : '') + '.' }) : null),
+      foot));
+    if (window.innerWidth <= 1180 && D.panel.scrollIntoView) D.panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function lineCard(l, d) {
+    var u = D.ui.lines[l.id] = { l: l }, done = l.dispatched || (l.sets > 0 && l.open <= 0), booked = d.booked;
+    var opts = [{ v: '', label: '- pick from -' }], seen = {};
+    l.stock.forEach(function (s) { opts.push({ v: s.loc, label: s.loc + ' · ' + App.fmtQty(s.qty) + ' pcs' }); seen[s.loc] = true; });
+    if (l.pickFrom && !seen[l.pickFrom]) opts.push({ v: l.pickFrom, label: l.pickFrom + ' · none recorded' });
+    if (!l.stock.length) (PW.locationList || []).forEach(function (x) { if (!seen[x.code] && x.code !== l.pickFrom) opts.push({ v: x.code, label: x.code }); });
+    u.from = PW.select(opts, l.pickFrom, 'inp sm');
+    u.picked = PW.check('Picked', l.picked); u.packed = PW.check('Packed', l.packed);
+    u.from.disabled = done; u.picked.input.disabled = done; u.packed.input.disabled = done;
+    u.picked.input.addEventListener('change', function () { if (!u.picked.get()) u.packed.set(false); });
+    u.packed.input.addEventListener('change', function () { if (u.packed.get()) u.picked.set(true); });
+    u.ship = h('input', { class: 'inp sm', type: 'number', min: 0, step: 'any', value: l.open, 'aria-label': 'Sets to dispatch now' });
+    var pcsText = App.fmtQty(l.sets) + ' sets × ' + App.fmtQty(l.pcs) + ' = ' + App.fmtQty(l.sets * l.pcs) + ' pcs';
+    return h('div', { class: 'line' },
+      h('div', { class: 'pw-head' }, h('div', null, h('b', { text: l.name || 'Item' }), h('div', { class: 'pw-exp', text: (l.itemCode ? l.itemCode + ' · ' : 'No item code · ') + pcsText + (l.dispatchedSets > 0 && !done ? ' · ' + App.fmtQty(l.dispatchedSets) + ' sets already sent' : '') })),
+        done ? h('span', { class: 'pw-lock', text: 'Dispatched' }) : null),
+      done ? null : h('div', { class: 'line-nums' }, h('div', { style: 'grid-column:span 2' }, h('label', { text: 'Pick from' }), u.from),
+        h('div', { class: 'pw-checks', style: 'grid-column:span 2;padding-top:6px' }, u.picked.el, u.packed.el)),
+      done || !booked ? null : h('div', { class: 'pw-ship' }, h('div', null, h('label', { text: 'Sets to dispatch now (of ' + App.fmtQty(l.open) + ' open)' }), u.ship)),
+      !done && l.pickFrom && l.itemCode && l.atPick < l.open * l.pcs ? h('div', { class: 'hint warn', text: 'Only ' + App.fmtQty(l.atPick) + ' pcs recorded at ' + l.pickFrom + ' (needs ' + App.fmtQty(l.open * l.pcs) + ').' }) : null);
+  }
+
+  function flags() {
+    return D.detail.lines.filter(function (l) { return !(l.dispatched || (l.sets > 0 && l.open <= 0)); }).map(function (l) {
+      var u = D.ui.lines[l.id];
+      return { id: l.id, pickFrom: u.from.value, picked: u.picked.get(), packed: u.packed.get() };
+    });
+  }
+  function saveFlags() { return App.api('disp.save', { orderId: D.detail.id, lines: flags() }); }
+  function toastWarn(r) { (r && r.warnings || []).forEach(function (w) { App.toast(w, 'warn'); }); }
+  function refresh() { return Promise.all([openOrder(D.detail.id, true), load()]); }
+
+  function book() {
+    var tr = D.ui.tr.value.trim();
+    if (!tr) { D.ui.tr.focus(); throw new Error('Enter the transporter you booked.'); }
+    return saveFlags().then(function (r) {
+      toastWarn(r);
+      return App.api('disp.book', { orderId: D.detail.id, booked: true, transporter: tr, lrNo: D.ui.lr.value });
+    }).then(function () { App.toast('Transport booked with ' + tr, 'ok'); return refresh(); });
+  }
+  function unbook() {
+    return App.confirm({ title: 'Change the booking', message: 'Un-book the transport for ' + D.detail.no + '? You can book it again.', ok: 'Un-book' }).then(function (yes) {
+      if (!yes) return;
+      return App.api('disp.book', { orderId: D.detail.id, booked: false }).then(function () { App.toast('Booking removed', 'ok'); return refresh(); });
+    });
+  }
+  function dispatch() {
+    var d = D.detail, send = [];
+    d.lines.forEach(function (l) {
+      var done = l.dispatched || (l.sets > 0 && l.open <= 0); if (done) return;
+      var n = num(D.ui.lines[l.id].ship.value);
+      if (n > 0) send.push({ id: l.id, sets: n, name: l.name });
+    });
+    if (!send.length) throw new Error('Enter the sets to dispatch on at least one line.');
+    return saveFlags().then(function (r) {
+      toastWarn(r);
+      return App.confirm({ title: 'Dispatch', message: 'Dispatch ' + send.length + (send.length === 1 ? ' line' : ' lines') + ' of ' + d.no + ' to ' + d.customer + '? The stock is reduced at the pick locations.', ok: 'Dispatch' });
+    }).then(function (yes) {
+      if (!yes) return;
+      return App.api('disp.dispatch', { orderId: d.id, lines: send.map(function (s) { return { id: s.id, sets: s.sets }; }), lrNo: D.ui.lr.value, transporter: D.ui.tr.value, date: D.ui.dt.value }).then(function (res) {
+        App.toast(res.complete ? d.no + ' fully dispatched' : 'Part of ' + d.no + ' dispatched - the rest is still open', 'ok');
+        toastWarn(res); return refresh();
+      });
+    });
+  }
+
+  App.register('dispatch', 'Dispatch', { init: init, show: function () { App.refreshLookups(); load(); } });
+})();
+</script>

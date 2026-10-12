@@ -1,0 +1,74 @@
+<script>
+/* PutAwayBoard.html - Warehouse: received goods that still need a shelf. Choose the location and the pieces; the stock
+   ledger (Stock Movement) gets a "Put-away" line automatically. Putting away only part of a line is fine: the rest stays here. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('warehouse')) return;
+  var B = { search: '', seq: 0, rows: [], listBox: null, countBox: null };
+
+  function init(root) {
+    var search = PW.search('Search delivery, supplier, item…', 'Search put-away', function (v) { B.search = v; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Put-away' }),
+      h('p', { text: 'Goods that have been received and counted. Put each one on a shelf and record where. Damaged pieces are not put away.' }))));
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Waiting for a location' }), h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+  }
+
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return Promise.all([App.api('put.list', { search: B.search }), PW.locations(), App.products().catch(function () { return null; })]).then(function (res) {
+      var d = res[0];
+      if (seq !== B.seq) return;
+      B.rows = d.rows;
+      PW.badge('putaway', d.rows.length, 'Lines waiting for a location');
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' line' : ' lines') + ' to put away';
+      render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'the put-away list', e); } });
+  }
+
+  function rowEl(r) {
+    var held = {}; r.where.forEach(function (w) { held[w.loc] = w.qty; });
+    var loc = App.combo(PW.locationPicker(held, { placeholder: 'Location, e.g. FL1-ZA' }));
+    var first = (PW.locationList || []).filter(function (l) { return l.code === (r.planned || (r.where[0] && r.where[0].loc)); })[0];
+    if (first) loc.set(first);
+    var pcs = h('input', { class: 'inp sm pw-n', type: 'number', min: 0, step: 'any', value: r.goodPcs, 'aria-label': 'Pieces to put away' });
+    var stk = PW.check('Stickered', r.stickered);
+    var pick = null;
+    if (!r.itemCode) pick = App.combo(App.productPicker({ placeholder: 'Pick the item first', allowFree: false, none: 'Not in Products - add it on the Stock tab (New item)' }));
+    var btn = h('button', { type: 'button', class: 'btn sm primary', text: 'Put away' });
+    btn.addEventListener('click', function () {
+      App.run(btn, function () {
+        var l = loc.get(), item = pick ? pick.get() : null, n = App.num(pcs.value);
+        if (pick && (!item || item.free)) { pick.focus(); throw new Error('Pick the item for this line first.'); }
+        if (!l || l.free) { loc.focus(); throw new Error('Pick the location from the list.'); }
+        if (!(n > 0)) { pcs.focus(); throw new Error('Enter how many pieces to put away.'); }
+        return App.api('put.do', { lineId: r.id, location: l.code, pcs: n, itemCode: item ? item.code : '', stickered: stk.get() }).then(function (res) {
+          App.toast(App.fmtQty(res.putAway) + ' pcs of ' + r.name + ' put away at ' + res.location + (res.split ? ' - ' + App.fmtQty(res.left) + ' pcs still to put away' : ''), 'ok');
+          return load();
+        });
+      });
+    });
+    return h('tr', null,
+      h('td', { 'data-l': 'Delivery' }, h('b', { text: r.grnNo }), h('span', { class: 'sub', text: r.supplier }), h('span', { class: 'sub', text: 'Received ' + App.fmtShort(r.receivedDate) })),
+      h('td', { 'data-l': 'Item' }, r.name || 'New item', r.itemCode ? h('span', { class: 'sub', text: r.itemCode }) : null, pick ? pick.el : null,
+        r.where.length ? h('div', { class: 'pw-locs', style: 'margin-top:6px' }, r.where.map(function (w) { return h('span', { class: 'pw-chip' }, w.loc, h('i', { text: App.fmtQty(w.qty) })); })) : null),
+      h('td', { class: 'num', 'data-l': 'To put away' }, App.fmtQty(r.goodPcs) + ' pcs', h('span', { class: 'sub', text: r.per > 1 ? App.fmtQty(r.goodPcs / r.per) + ' sets of ' + App.fmtQty(r.per) : '' }),
+        r.damaged ? h('span', { class: 'sub late', text: App.fmtQty(r.damaged) + ' damaged' }) : null),
+      h('td', { 'data-l': 'Location' }, loc.el), h('td', { 'data-l': 'Pieces' }, pcs), h('td', { 'data-l': 'Sticker' }, stk.el),
+      h('td', { class: 'acts' }, btn));
+  }
+  function render() {
+    App.clear(B.listBox);
+    if (!B.rows.length) { B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: 'Nothing is waiting to be put away.' }))); return; }
+    var head = h('tr', null, h('th', { text: 'Delivery' }), h('th', { text: 'Item' }), h('th', { class: 'num', text: 'To put away' }), h('th', { text: 'Location' }), h('th', { text: 'Pieces' }), h('th', { text: 'Sticker' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+    var body = h('tbody');
+    B.rows.forEach(function (r) { body.appendChild(rowEl(r)); });
+    B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't', style: 'min-width:1000px' }, h('thead', null, head), body)));
+  }
+
+  App.register('putaway', 'Put-away', { init: init, show: function () { App.refreshLookups(); load(); } });
+})();
+</script>

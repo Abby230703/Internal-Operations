@@ -1,0 +1,327 @@
+<script>
+/* PurchaseOrdersBoard.html - Procurement: make a purchase order from accepted requirements (or any item), keep it as a
+   draft, then send it. Sending marks it On Order, makes the PDF and opens the goods receipt for the Warehouse.
+   Prices are Rs per piece, GST-exclusive. Quantities are in SETS (pieces per set x sets = pieces). */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('procurement')) return;
+  var LABELS = ['All', 'Draft', 'Awaiting delivery', 'Received'];
+  var P = { filter: 'All', search: '', seq: 0, rows: [], counts: {}, listBox: null, countBox: null, chips: null, stats: null, drawer: null, body: null, btn: {}, F: null, cands: [] };
+
+  function init(root) {
+    P.chips = App.seg({
+      cls: 'chips-s', label: 'Filter purchase orders',
+      options: [{ v: 'All', label: LABELS[0] }, { v: 'Draft', label: LABELS[1] }, { v: 'Awaiting', label: LABELS[2] }, { v: 'Received', label: LABELS[3] }],
+      value: P.filter, onChange: function (v) { P.filter = v; load(); }
+    });
+    var search = PW.search('Search PO number, supplier…', 'Search purchase orders', function (v) { P.search = v; load(); });
+    P.stats = h('div', { class: 'pw-stats' });
+    P.countBox = h('div', { class: 'count' }); P.listBox = h('div');
+    var newBtn = h('button', { type: 'button', class: 'btn primary' }, App.icon('plus', 16), 'New purchase order');
+    newBtn.addEventListener('click', function () { openNew([], ''); });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Purchase orders' }),
+      h('p', { text: 'Order from a supplier. A draft can be changed; once sent it counts as On Order and the Warehouse sees the delivery coming.' })),
+      h('div', { class: 'acts' }, newBtn)));
+    root.appendChild(P.stats);
+    root.appendChild(h('div', null,
+      h('div', { class: 'toolbar' }, h('h2', { text: 'All purchase orders' }), P.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+        h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })),
+      P.countBox, P.listBox));
+    buildDrawer();
+  }
+
+  // ---------- list ----------
+  function load() {
+    var seq = ++P.seq;
+    P.countBox.textContent = 'Loading…';
+    return Promise.all([App.api('po.list', { filter: P.filter, search: P.search }), PW.suppliers().catch(function () { return null; })]).then(function (res) {
+      var d = res[0];
+      if (seq !== P.seq) return;
+      P.rows = d.rows; P.counts = d.counts;
+      PW.badge('purchase', d.counts.draft, 'Draft purchase orders');
+      PW.chipCounts(P.chips, LABELS, [0, d.counts.draft, d.counts.awaiting, d.counts.received]);
+      P.countBox.textContent = d.shown + (d.shown === 1 ? ' purchase order' : ' purchase orders');
+      renderStats(); renderList();
+    }).catch(function (e) { if (seq === P.seq) { P.countBox.textContent = ''; PW.loadError(P.listBox, 'purchase orders', e); } });
+  }
+  function renderStats() {
+    function stat(cls, icon, label, val) { return h('div', { class: 'stat ' + cls }, h('i', null, icon), h('div', null, h('span', { text: label }), h('b', { text: val }))); }
+    App.clear(P.stats);
+    P.stats.appendChild(stat('c', App.icon('clock', 22), 'Drafts to send', String(P.counts.draft || 0)));
+    P.stats.appendChild(stat('', App.icon('purchase', 22), 'Awaiting delivery', String(P.counts.awaiting || 0)));
+    P.stats.appendChild(stat('g', App.icon('check', 22), 'Received', String(P.counts.received || 0)));
+  }
+  function recvBadge(p) {
+    if (p.status === 'Draft') return App.badge('Draft', 'amber');
+    return App.badge(p.recv, p.recv === 'Received' ? 'green' : (p.recv === 'Part received' ? 'blue' : 'amber'));
+  }
+  function rowEl(p) {
+    var open = h('button', { type: 'button', class: 'ordno', text: p.no, 'aria-label': 'Open ' + p.no });
+    open.addEventListener('click', function () { openPo(p.id); });
+    var act = [h('button', { type: 'button', class: 'btn sm', text: p.status === 'Draft' ? 'Edit' : 'View', onclick: function () { openPo(p.id); } })];
+    if (p.status === 'Draft') {
+      act.push(h('button', { type: 'button', class: 'btn sm primary', text: 'Send', onclick: function (e) { App.run(e.currentTarget, function () { return sendNow(p); }); } }));
+    } else act.push(h('button', { type: 'button', class: 'btn sm soft', text: 'PDF', onclick: function (e) { App.run(e.currentTarget, function () { return showPdf(p.id, p.no); }); } }));
+    return h('tr', null,
+      h('td', { 'data-l': 'PO' }, open, h('span', { class: 'sub', text: App.fmtDate(p.date) })),
+      h('td', { 'data-l': 'Supplier', text: p.supplier || '–' }),
+      h('td', { 'data-l': 'Items' }, p.lines + (p.lines === 1 ? ' item' : ' items'), h('span', { class: 'sub', text: App.fmtQty(p.sets) + ' sets' + (p.status === 'Sent' && p.open ? ' · ' + App.fmtQty(p.open) + ' open' : '') })),
+      h('td', { class: 'num', 'data-l': 'Value', text: 'Rs ' + App.inr(p.value) }),
+      h('td', { 'data-l': 'Delivery' }, p.delivery ? [App.fmtDate(p.delivery), p.late ? h('span', { class: 'sub late', text: 'Overdue' }) : null] : h('span', { class: 'dash', text: '–' })),
+      h('td', { 'data-l': 'Status' }, recvBadge(p), p.terms ? h('span', { class: 'sub', text: p.terms }) : null),
+      h('td', { class: 'acts' }, act));
+  }
+  function renderList() {
+    App.clear(P.listBox);
+    if (!P.rows.length) { P.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: 'No purchase orders yet. Use New purchase order, or Make PO on the Purchase queue.' }))); return; }
+    var head = h('tr', null, h('th', { text: 'PO' }), h('th', { text: 'Supplier' }), h('th', { text: 'Items' }), h('th', { class: 'num', text: 'Value (incl. GST)' }), h('th', { text: 'Delivery' }), h('th', { text: 'Status' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+    var body = h('tbody');
+    P.rows.forEach(function (p) { body.appendChild(rowEl(p)); });
+    P.listBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), body)));
+  }
+  function sendNow(p) {
+    return App.confirm({ title: 'Send purchase order', message: 'Send ' + p.no + ' to ' + p.supplier + ' (Rs ' + App.inr(p.value) + ')? It will count as On Order, a PDF is made, and the Warehouse gets a goods receipt to receive against. It cannot be changed after this.', ok: 'Send' }).then(function (yes) {
+      if (!yes) return;
+      return App.api('po.send', { id: p.id }).then(function (r) { sentToast(r); return load(); });
+    });
+  }
+  function sentToast(r) {
+    App.toast('Purchase order ' + r.no + ' sent', 'ok');
+    if (r.warning) App.toast(r.warning, 'warn');
+  }
+  function showPdf(id, no) {
+    return App.api('po.pdf', { id: id }).then(function (d) {
+      App.modal({ title: 'Purchase order ' + no, body: h('div', null, h('p', { text: 'The PDF is ready.' }), h('a', { class: 'btn primary', href: d.url, target: '_blank', rel: 'noopener', text: 'Open PDF' })), buttons: [{ label: 'Close' }] });
+    });
+  }
+
+  // ---------- the order form (drawer) ----------
+  function buildDrawer() {
+    var b = P.btn;
+    b.cancel = h('button', { type: 'button', class: 'btn', text: 'Cancel', onclick: function () { P.drawer.close(); } });
+    b.del = h('button', { type: 'button', class: 'btn danger', text: 'Delete draft' });
+    b.save = h('button', { type: 'button', class: 'btn', text: 'Save draft' });
+    b.send = h('button', { type: 'button', class: 'btn primary', text: 'Save & send' });
+    b.pdf = h('button', { type: 'button', class: 'btn soft', text: 'Open PDF' });
+    b.close = h('button', { type: 'button', class: 'btn', text: 'Close', onclick: function () { P.drawer.close(); } });
+    b.del.addEventListener('click', function () { App.run(b.del, removeDraft); });
+    b.save.addEventListener('click', function () { App.run(b.save, function () { return save(false); }); });
+    b.send.addEventListener('click', function () { App.run(b.send, function () { return save(true); }); });
+    b.pdf.addEventListener('click', function () { App.run(b.pdf, function () { return showPdf(P.F.id, P.F.no); }); });
+    P.body = h('div');
+    P.drawer = App.drawer({ title: 'Purchase order', wide: true, body: P.body, footer: [b.cancel, b.del, b.save, b.send, b.pdf, b.close] });
+  }
+  function setTitle(t, sub) {
+    var h2 = P.drawer.el.querySelector('.drawer-h h2'), p = P.drawer.el.querySelector('.drawer-h p');
+    h2.textContent = t;
+    if (!p && sub) { p = h('p'); h2.parentNode.appendChild(p); }
+    if (p) p.textContent = sub || '';
+  }
+  function blankForm() { return { id: '', no: '', status: 'Draft', supplier: null, date: App.today(), delivery: '', terms: '', lines: [], uid: 0, grn: null, ui: { lines: {} } }; }
+
+  /** reqIds: accepted requirements to start from (from the Purchase queue); supplierId: their common supplier */
+  function openNew(reqIds, supplierId) {
+    P.F = blankForm();
+    setTitle('New purchase order', 'Add accepted requirements, or any item you want to order.');
+    Promise.all([PW.suppliers(), App.products(), loadCands()]).then(function () {
+      if (supplierId) (PW.supplierList || []).forEach(function (s) { if (s.id === supplierId) P.F.supplier = s; });
+      var picked = P.cands.filter(function (r) { return reqIds.indexOf(r.id) >= 0; });
+      picked.forEach(function (r) { P.F.lines.push(lineFromReq(r)); });
+      if (!P.F.lines.length) P.F.lines.push(blankLine());
+      renderForm(); P.drawer.open();
+    }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function openPo(id) {
+    return Promise.all([App.api('po.get', { id: id }), PW.suppliers(), App.products(), loadCands()]).then(function (res) {
+      var d = res[0], F = blankForm();
+      F.id = d.id; F.no = d.no; F.status = d.status; F.date = d.date; F.delivery = d.delivery; F.terms = d.terms; F.grn = d.grn; F.pdf = d.pdf;
+      (PW.supplierList || []).forEach(function (s) { if (s.id === d.supplierId) F.supplier = s; });
+      if (!F.supplier) F.supplier = { id: d.supplierId, name: d.supplier };
+      P.F = F;
+      d.lines.forEach(function (l) {
+        F.lines.push({ uid: ++F.uid, id: l.id, reqId: l.reqId, itemCode: l.itemCode, desc: l.desc, name: l.name, pcs: l.pcs, sets: l.sets, rate: l.rate, gst: Math.round(l.gst * 10000) / 100,
+                       supItemCode: l.supItemCode, supItemName: l.supItemName, party: l.party, open: l.open });
+      });
+      if (!F.lines.length && d.status === 'Draft') F.lines.push(blankLine());
+      setTitle(d.status === 'Draft' ? 'Edit ' + d.no : d.no, d.status === 'Draft' ? 'Draft - not sent yet' : 'Sent - this order can no longer be changed');
+      renderForm(); P.drawer.open();
+    }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function loadCands() {
+    return App.api('pq.list', { filter: 'Accepted' }).then(function (d) { P.cands = d.rows; return d; });
+  }
+  function blankLine() { return { uid: ++P.F.uid, id: '', reqId: '', itemCode: '', desc: '', name: '', pcs: 1, sets: '', rate: '', gst: '', supItemCode: '', supItemName: '', party: '', open: 0 }; }
+  function lineFromReq(r) {
+    var p = r.itemCode ? App.findProduct(r.itemCode) : null;
+    return { uid: ++P.F.uid, id: '', reqId: r.id, itemCode: r.itemCode, desc: r.itemCode ? '' : r.item, name: r.item, pcs: r.pcs || 1, sets: r.sets, rate: '', gst: p && p.gst !== '' ? p.gst : '',
+             supItemCode: '', supItemName: '', party: r.party, open: 0 };
+  }
+  function used(reqId) { return P.F.lines.some(function (l) { return l.reqId === reqId; }); }
+
+  function renderForm() {
+    var F = P.F, b = P.btn, edit = F.status === 'Draft';
+    b.cancel.hidden = !edit; b.save.hidden = !edit; b.send.hidden = !edit; b.del.hidden = !(edit && F.id); b.pdf.hidden = edit || !F.id; b.close.hidden = edit;
+    App.clear(P.body);
+    if (!edit) { renderReadOnly(); return; }
+    var sup = App.combo(PW.supplierPicker({ onPick: function (s) { F.supplier = s; renderCands(); }, onInput: function () { F.supplier = null; renderCands(); } }));
+    if (F.supplier) sup.set(F.supplier);
+    var date = h('input', { class: 'inp', type: 'date', value: F.date || '' }), delivery = h('input', { class: 'inp', type: 'date', value: F.delivery || '' });
+    var terms = h('input', { class: 'inp', type: 'text', maxlength: 80, value: F.terms || '', list: 'pw-terms', placeholder: 'e.g. 40% advance' });
+    var dl = h('datalist', { id: 'pw-terms' }, (App.boot.lists.paymentTerms || []).map(function (t) { return h('option', { value: t }); }));
+    date.addEventListener('input', function () { F.date = date.value; }); delivery.addEventListener('input', function () { F.delivery = delivery.value; }); terms.addEventListener('input', function () { F.terms = terms.value; });
+    F.ui.sup = sup;
+    P.body.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '1' }), h('h2', { text: 'Supplier' }))),
+      h('div', { class: 'grid' }, h('div', { class: 'field span2' }, h('label', null, 'Supplier', h('span', { class: 'req', text: ' *' })), sup.el),
+        App.field('PO date', date), App.field('Delivery by', delivery), App.field('Payment terms', terms)), dl));
+    F.ui.candBox = h('div'); P.body.appendChild(F.ui.candBox);
+    F.ui.linesBox = h('div', { class: 'lines' });
+    var add = h('button', { type: 'button', class: 'btn soft', text: '+ Add item', onclick: function () { var l = blankLine(); F.lines.push(l); renderLines(); focusLast(); } });
+    P.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'Items' })),
+      h('span', { class: 'mute', style: 'font-size:13px', text: 'Rate is per piece, excluding GST. Quantity is in sets.' })), F.ui.linesBox, h('div', { style: 'margin-top:14px' }, add)));
+    var tx = function (label, cls) { var bb = h('b', { text: 'Rs 0.00' }); return { el: h('div', { class: 't1' + (cls ? ' ' + cls : '') }, h('span', { text: label }), bb), b: bb }; };
+    F.ui.tTax = tx('Taxable value'); F.ui.tGst = tx('GST'); F.ui.tAll = tx('Total', 'g');
+    P.body.appendChild(h('div', { class: 'dock', role: 'region', 'aria-label': 'Order total', style: 'margin-top:16px' }, h('div', { class: 'sp' }), F.ui.tTax.el, F.ui.tGst.el, F.ui.tAll.el));
+    renderCands(); renderLines();
+  }
+  function focusLast() { var l = P.F.lines[P.F.lines.length - 1]; if (l && P.F.ui.lines[l.uid]) P.F.ui.lines[l.uid].item.focus(); }
+
+  function renderCands() {
+    var F = P.F, box = F.ui.candBox;
+    if (!box) return;
+    App.clear(box);
+    var list = P.cands.filter(function (r) { return !used(r.id) && (!F.supplier || !r.supplierId || r.supplierId === F.supplier.id); });
+    if (!list.length) return;
+    var addAll = h('button', { type: 'button', class: 'btn sm soft', text: 'Add all', onclick: function () { addReqs(list); } });
+    var grid = h('div', { class: 'reqs' }, list.map(function (r) {
+      var q = App.qtyOf(r.sets, r.itemCode);
+      return h('div', { class: 'reqrow' }, h('div', null, h('b', { text: r.item }),
+        h('small', { text: [q.main, r.party || 'Stock', r.supplier && !F.supplier ? r.supplier : '', r.needBy ? 'need by ' + App.fmtDate(r.needBy) : ''].filter(Boolean).join(' · ') })),
+        h('button', { type: 'button', class: 'btn sm primary', text: 'Add', onclick: function () { addReqs([r]); } }));
+    }));
+    box.appendChild(h('div', { class: 'card reqbox', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '+' }), h('h2', { text: 'Accepted requirements waiting for an order (' + list.length + ')' })), addAll), grid));
+  }
+  function addReqs(rs) {
+    var F = P.F;
+    F.lines = F.lines.filter(function (l) { return !isBlank(l); });
+    rs.forEach(function (r) { if (!used(r.id)) F.lines.push(lineFromReq(r)); });
+    if (!F.lines.length) F.lines.push(blankLine());
+    if (!F.supplier) {
+      var sid = rs[0].supplierId;
+      if (sid && rs.every(function (r) { return r.supplierId === sid; })) (PW.supplierList || []).forEach(function (s) { if (s.id === sid) { F.supplier = s; F.ui.sup.set(s); } });
+    }
+    renderCands(); renderLines();
+  }
+  function isBlank(l) { return !l.itemCode && !l.desc && !l.reqId && l.sets === '' && l.rate === ''; }
+
+  function renderLines() {
+    var F = P.F;
+    App.clear(F.ui.linesBox); F.ui.lines = {};
+    F.lines.forEach(function (l, i) { F.ui.linesBox.appendChild(lineRow(l, i)); });
+    recalc();
+  }
+  function num(v) { var n = App.num(v); return isNaN(n) ? 0 : n; }
+  function lineRow(l, i) {
+    var F = P.F, u = {};
+    F.ui.lines[l.uid] = u;
+    u.item = App.combo(App.productPicker({
+      placeholder: 'Item name or code - or type a new item',
+      onPick: function (it) {
+        if (it.free) { l.itemCode = ''; l.desc = it.name; l.name = it.name; }
+        else { l.itemCode = it.code; l.desc = ''; l.name = it.name; l.pcs = it.pcs > 0 ? it.pcs : 1; u.pcs.value = l.pcs; if (it.gst !== '') { l.gst = it.gst; u.gst.value = it.gst; } }
+        recalc();
+      },
+      onInput: function (t) { l.itemCode = ''; l.desc = t; l.name = t; }
+    }));
+    var p = l.itemCode ? App.findProduct(l.itemCode) : null;
+    if (p) u.item.set(p); else if (l.name) u.item.setText(l.name);
+    if (l.reqId) u.item.disable(true);
+    function inp(key, extra) { var el = h('input', { class: 'inp sm', type: 'number', step: 'any', min: 0, inputmode: 'decimal', value: l[key] === '' ? '' : l[key] }); Object.keys(extra || {}).forEach(function (k) { el.setAttribute(k, extra[k]); }); el.addEventListener('input', function () { l[key] = el.value; recalc(); }); return el; }
+    u.pcs = inp('pcs', { min: 1 }); u.sets = inp('sets'); u.rate = inp('rate'); u.gst = inp('gst', { max: 100 });
+    u.tot = h('div', { class: 'amt', style: 'font-size:15px' }); u.amt = h('div', { class: 'amt' });
+    var rm = h('button', { type: 'button', class: 'x rm', title: 'Remove this item', 'aria-label': 'Remove item', text: '×' });
+    rm.addEventListener('click', function () { F.lines.splice(F.lines.indexOf(l), 1); if (!F.lines.length) F.lines.push(blankLine()); renderCands(); renderLines(); });
+    function cell(label, ctl) { return h('div', null, h('label', { text: label }), ctl); }
+    var sup = h('input', { class: 'inp sm', type: 'text', maxlength: 60, placeholder: 'Optional', value: l.supItemCode || '' });
+    sup.addEventListener('input', function () { l.supItemCode = sup.value; });
+    return h('div', { class: 'line' },
+      h('div', { class: 'line-top' }, h('span', { class: 'no', 'aria-hidden': 'true', text: String(i + 1) }),
+        h('div', { class: 'item' }, h('label', { text: 'Item' }), u.item.el, h('div', { class: 'hint' + (l.itemCode ? '' : ' warn'), text: l.reqId ? 'For ' + (l.party || 'stock') + (l.itemCode ? ' · ' + l.itemCode : '') : (l.itemCode ? l.itemCode : (l.desc ? 'New item - add it to Products before it is put away' : '')) })), rm),
+      h('div', { class: 'line-nums' }, cell('Pcs / set', u.pcs), cell('Sets', u.sets), cell('Rate Rs/pc', u.rate), cell('GST %', u.gst), cell('Supplier code', sup),
+        h('div', null, h('label', { text: 'Total pcs' }), u.tot), h('div', null, h('label', { text: 'Amount (incl. GST)' }), u.amt)));
+  }
+  function recalc() {
+    var F = P.F, tax = 0, gst = 0;
+    F.lines.forEach(function (l) {
+      var u = F.ui.lines[l.uid], pcs = Math.max(1, num(l.pcs)), net = App.r2(pcs * num(l.sets) * num(l.rate)), g = App.r2(net * num(l.gst) / 100);
+      tax += net; gst += g;
+      if (u) { u.tot.textContent = App.fmtQty(pcs * num(l.sets)) + ' pcs'; App.clear(u.amt).appendChild(document.createTextNode('Rs ' + App.inr(net + g))); u.amt.appendChild(h('small', { text: 'GST ' + App.inr(g) })); }
+    });
+    F.ui.tTax.b.textContent = 'Rs ' + App.inr(tax); F.ui.tGst.b.textContent = 'Rs ' + App.inr(gst); F.ui.tAll.b.textContent = 'Rs ' + App.inr(App.r2(tax + gst));
+  }
+
+  function renderReadOnly() {
+    var F = P.F, net = 0, gst = 0;
+    P.body.appendChild(h('div', { class: 'card' }, h('dl', { class: 'kv' },
+      h('dt', { text: 'Supplier' }), h('dd', null, h('b', { text: F.supplier ? F.supplier.name : '' })),
+      h('dt', { text: 'PO date' }), h('dd', { text: App.fmtDate(F.date) }), h('dt', { text: 'Delivery by' }), h('dd', { text: F.delivery ? App.fmtDate(F.delivery) : 'as agreed' }),
+      h('dt', { text: 'Payment' }), h('dd', { text: F.terms || 'as agreed' }),
+      F.grn ? h('dt', { text: 'Goods receipt' }) : null, F.grn ? h('dd', { text: F.grn.no + ' · ' + F.grn.status }) : null)));
+    var cols = [
+      { h: 'Item', f: function (l) { return [l.name, l.itemCode ? h('span', { class: 'sub', text: l.itemCode }) : h('span', { class: 'sub late', text: 'New item' }), l.party ? h('span', { class: 'sub', text: 'For ' + l.party }) : null]; } },
+      { h: 'Pcs × sets', cls: 'num', f: function (l) { return l.pcs + ' × ' + App.fmtQty(l.sets) + ' = ' + App.fmtQty(l.pcs * l.sets); } },
+      { h: 'Open sets', cls: 'num', f: function (l) { return l.open > 0 ? App.fmtQty(l.open) : h('span', { class: 'pw-pos', text: 'Received' }); } },
+      { h: 'Rate Rs/pc', cls: 'num', f: function (l) { return App.inr(l.rate); } },
+      { h: 'GST', cls: 'num', f: function (l) { return Math.round(l.gst * 10000) / 100 + '%'; } },
+      { h: 'Amount', cls: 'num', f: function (l) { var n = l.pcs * l.sets * l.rate; net += n; gst += n * l.gst; return App.inr(n * (1 + l.gst)); } }
+    ];
+    P.body.appendChild(h('div', { style: 'margin-top:16px' }, App.table(cols, F.lines, 'No lines.')));
+    P.body.appendChild(h('div', { class: 'totals' }, h('span', null, 'Taxable', h('b', { text: 'Rs ' + App.inr(net) })), h('span', null, 'GST', h('b', { text: 'Rs ' + App.inr(gst) })), h('span', null, 'Total', h('b', { text: 'Rs ' + App.inr(net + gst) }))));
+  }
+
+  // ---------- save / send / delete ----------
+  function payload(send) {
+    var F = P.F;
+    if (!F.supplier || !F.supplier.id) { F.ui.sup.focus(); throw new Error('Pick the supplier from the list.'); }
+    var real = F.lines.filter(function (l) { return !isBlank(l); });
+    if (!real.length) throw new Error('Add at least one item.');
+    var lines = real.map(function (l, i) {
+      var n = 'Item ' + (i + 1) + ': ';
+      if (!l.itemCode && !U_s(l.desc)) throw new Error(n + 'pick an item, or type the name of a new item.');
+      if (!(num(l.sets) > 0)) throw new Error(n + 'enter the quantity in sets.');
+      if (send && !(num(l.rate) > 0)) throw new Error(n + 'enter the rate before sending.');
+      return { id: l.id, reqId: l.reqId, itemCode: l.itemCode, desc: l.desc, supItemCode: l.supItemCode, supItemName: l.supItemName, pcs: Math.max(1, num(l.pcs)), sets: num(l.sets), rate: num(l.rate), gst: num(l.gst) / 100 };
+    });
+    return { id: F.id, supplierId: F.supplier.id, date: F.date, delivery: F.delivery, terms: F.terms, lines: lines, send: !!send };
+  }
+  function U_s(v) { return String(v === null || v === undefined ? '' : v).trim(); }
+  function save(send) {
+    var body = payload(send);
+    var go = function () {
+      return App.api('po.save', body).then(function (r) {
+        if (r.sent) sentToast(r); else App.toast('Draft ' + r.no + ' saved', 'ok');
+        P.drawer.close(); return Promise.all([load(), loadCands()]);
+      });
+    };
+    if (!send) return go();
+    var total = P.F.ui.tAll.b.textContent;
+    return App.confirm({ title: 'Send purchase order', message: 'Save and send this order to ' + P.F.supplier.name + ' (' + total + ')? It will count as On Order, a PDF is made, and the Warehouse gets a goods receipt to receive against. It cannot be changed after this.', ok: 'Save & send' }).then(function (yes) { if (yes) return go(); });
+  }
+  function removeDraft() {
+    return App.confirm({ title: 'Delete draft', danger: true, ok: 'Delete', cancel: 'Keep it', message: 'Delete draft ' + P.F.no + '? Its requirements go back to the Purchase queue.' }).then(function (yes) {
+      if (!yes) return;
+      return App.api('po.delete', { id: P.F.id }).then(function () { App.toast('Draft deleted', 'ok'); P.drawer.close(); return load(); });
+    });
+  }
+
+  App.register('purchase', 'Purchase orders', {
+    init: init,
+    show: function (p) {
+      App.refreshLookups(); PW.suppliers(true).catch(function () { return null; });
+      load();
+      if (p && p.reqIds && p.reqIds.length) openNew(p.reqIds, p.supplierId || '');
+      else if (p && p.open) openPo(p.open);
+    }
+  });
+})();
+</script>

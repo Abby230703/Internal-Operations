@@ -26,7 +26,7 @@ Changed (your files, with the edits marked `PW:` in the code):
 ## Install
 
 1. Copy the new files into the Apps Script project and replace `Config.gs`, `Main.gs`, `Index.html` with the versions here (if you changed those since, re-apply the `PW:` edits instead).
-2. Delete the old kanban script (the file with `SHEET_NAME = 'Sales_Leads'`, `onOpen`, `showDashboard`). It opens the `Index` template without `cfg`, so it no longer works with the shared page and the Sales app does not use it.
+2. Do not copy the old kanban script (the file with `SHEET_NAME = 'Sales_Leads'`, `onOpen`, `showDashboard`) into the replica. It opens the `Index` template without `cfg`, so it no longer works with the shared page, and the Sales app does not use it.
 3. In the `Users` tab give people their role: `Procurement`, `Warehouse`, `Accounts` (spelled exactly).
 4. Optional but recommended: make one shared Drive folder each for PO PDFs and audit photos and paste the IDs into `PO_PDF_FOLDER_ID` / `AUDIT_PHOTO_FOLDER_ID` (otherwise each user's own Drive gets a `PO_PDFs` / `Audit Queue_Images` folder).
 5. Run `runDiagnostics` once. It now also checks the 8 new tabs and the extra Sales Orders / Order Lines columns (`Transport Booked`, `Transporter`, `LR No.`, `Pick From`, `Picked`, `Packed`, `Dispatched Qty`…).
@@ -44,17 +44,18 @@ Changed (your files, with the edits marked `PW:` in the code):
 
 **Audit.** Warehouse counts a shelf (item, location, pieces, optional photo). Accounts approves (the ledger is adjusted by the difference) or rejects (nothing changes). Admin can do both.
 
-## Assumptions to confirm
+## Assumptions (confirmed)
 
 - `Damaged Qty` is in **pieces**; PO `Rate` is **Rs per piece, GST-exclusive** (same as the Prices convention).
 - Receiving and put-away quantities are stored in **sets** (fractions allowed); the ledger is in **pieces**.
 - A GRN is created when a PO is **sent**, not when it is drafted.
 - Dispatch requires transport to be booked first (the sheet only reaches "Ready to dispatch" after that).
 - Lines without an item code can be dispatched, but no stock is reduced for them (the ledger needs an item code).
+- A PO does not need a requirement behind it: in the PO builder, *+ Add item* adds any product (or a brand-new item name) for the chosen supplier. Requirements are only a shortcut (they appear under the supplier and can be added with one click).
 
 ## Noticed in the Sales code (not changed)
 
-- `OrdersBoard`: `STAGES` / `stageIdx` do not know `To pack` or `Ready to dispatch`, which the sheet produces, so those orders show step 1 in the progress bar. `Part dispatched` is never produced by the sheet.
+- `OrdersBoard`: `STAGES` / `stageIdx` did not know `To pack` or `Ready to dispatch`, which the sheet produces, so those orders showed step 1 in the progress bar. The five edits that fix it are in `OrdersBoard-stage-fix.txt` (apply them to your existing file). `Part dispatched` is never produced by the sheet.
 - Product list, parties and the item pickers are reused as they are.
 
 ## Checked, and what still needs a real deployment

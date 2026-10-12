@@ -1,0 +1,45 @@
+OPTIONAL FIX FOR YOUR EXISTING Sales file  OrdersBoard.html
+=============================================================
+Why: the sheet's Sales Orders "Stage (auto)" produces six open stages:
+  To pick -> To pack -> Book transport -> Ready to dispatch -> Dispatched (and Cancelled / No lines).
+OrdersBoard only knows "To pick", "Book transport" and "Dispatched", so an order at "To pack" or
+"Ready to dispatch" shows step 1 in its progress bar and the timeline, and its stage card
+is added at the end of the strip. This makes the board follow the sheet.
+
+Five small edits. In the Apps Script editor use Find (Ctrl+F) on the "FIND" text, and replace it with the "REPLACE" text.
+Nothing else in the file changes; no server code changes.
+
+-------------------------------------------------------------
+EDIT 1  (near the top)
+FIND:
+  var STAGES = ['Order received', 'To pick', 'Book transport', 'Dispatched'];
+REPLACE:
+  var STAGES = ['Order received', 'To pick', 'To pack', 'Book transport', 'Ready to dispatch', 'Dispatched'];
+
+-------------------------------------------------------------
+EDIT 2  (function stageIdx)
+FIND:
+  function stageIdx(s) { return { 'Order received': 1, 'To pick': 2, 'Book transport': 3, 'Part dispatched': 3, 'Dispatched': 4 }[s] || 1; }
+REPLACE:
+  function stageIdx(s) { return { 'Order received': 1, 'To pick': 2, 'To pack': 3, 'Book transport': 4, 'Ready to dispatch': 5, 'Part dispatched': 5, 'Dispatched': 6 }[s] || 1; }
+
+-------------------------------------------------------------
+EDIT 3  (function renderStrip - the first line)
+FIND:
+  var rows = B.activeRows, total = rows.length, stages = ['Order received', 'To pick', 'Book transport'];
+REPLACE:
+  var rows = B.activeRows, total = rows.length, stages = ['Order received', 'To pick', 'To pack', 'Book transport', 'Ready to dispatch'];
+
+-------------------------------------------------------------
+EDIT 4  (function orderRow - the progress bars)
+FIND:
+  for (var i = 1; i <= 4; i++) steps.push(
+REPLACE:
+  for (var i = 1; i <= STAGES.length; i++) steps.push(
+
+-------------------------------------------------------------
+EDIT 5  (function timeline)
+FIND:
+  (st === 'Dispatched' && n === 4)
+REPLACE:
+  (st === 'Dispatched' && n === STAGES.length)

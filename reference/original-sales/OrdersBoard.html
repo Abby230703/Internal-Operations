@@ -1,0 +1,463 @@
+<script>
+/* OrdersBoard.html - the Orders tab:
+   - "+ New order": the direct-order form (same form as Make Quote, in order mode) opens in a drawer
+   - quotes waiting for a decision (convert to order / mark as lost), plus the Lost list (reopen)
+   - a stage strip (counts and value per stage) that filters the orders list
+   - the orders list (progress, view in a side panel, cancel, sales order PDF)
+   Design update only: every server call and confirmation below is the same as before. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h;
+  var STAGES = ['Order received', 'To pick', 'Book transport', 'Dispatched'];
+  var B = {
+    root: null, qBox: null, qCount: null, qTitle: null, oBox: null, oCount: null, drawer: null, form: null, views: null, histSeg: null, histWrap: null, oSearchEl: null, qSearchEl: null,
+    filter: 'Active', view: 'Waiting', oSearch: '', qSearch: '', qSeq: 0, oSeq: 0, qTimer: null, oTimer: null,
+    stage: '', rows: [], activeRows: [], sortKey: 'new', sel: '', md: null, panel: null, panelBox: null, strip: null, qWaiting: 0
+  };
+  function init(root) {
+    B.root = root;
+    B.qBox = h('div'); B.qCount = h('span', { class: 'mute', style: 'font-size:13.5px' });
+    B.oBox = h('div'); B.oCount = h('div', { class: 'count' });
+    B.qTitle = h('h2', { text: 'Needs your decision' });
+    B.qCt = h('span', { class: 'ct', text: '0', title: 'Quotations not converted yet' });
+    var newBtn = h('button', { type: 'button', class: 'btn primary', title: 'Customer said yes straight away - skip the quotation' }, App.icon('plus', 16), 'New order');
+    newBtn.addEventListener('click', openForm);
+    var qSearch = h('input', { class: 'inp sm', type: 'search', placeholder: 'Search quote no. or name…', 'aria-label': 'Search quotations' });
+    B.qSearchEl = qSearch;
+    qSearch.addEventListener('input', function () {
+      clearTimeout(B.qTimer);
+      B.qTimer = setTimeout(function () { B.qSearch = qSearch.value; loadQuotes(); }, 300);
+    });
+    B.views = App.seg({
+      options: [{ v: 'Waiting', label: 'Waiting' }, { v: 'Lost', label: 'Lost' }], value: B.view, label: 'Quotation view',
+      onChange: function (v) { B.view = v; B.qTitle.textContent = v === 'Lost' ? 'Lost quotations' : 'Needs your decision'; loadQuotes(); }
+    });
+    B.histSeg = App.seg({
+      cls: 'chips-s', label: 'History filter',
+      options: [{ v: 'Dispatched', label: 'Dispatched' }, { v: 'Cancelled', label: 'Cancelled' }, { v: 'All', label: 'All' }],
+      value: 'Dispatched', onChange: function (v) { B.filter = v; B.stage = ''; loadOrders(); }
+    });
+    B.histWrap = h('div', { hidden: true }, B.histSeg.el);
+    var oSearch = h('input', { class: 'inp', type: 'search', placeholder: 'Search order no. or customer…', 'aria-label': 'Search orders' });
+    B.oSearchEl = oSearch;
+    oSearch.addEventListener('input', function () {
+      clearTimeout(B.oTimer);
+      B.oTimer = setTimeout(function () { B.oSearch = oSearch.value; loadOrders(); }, 300);
+    });
+    var sortSel = h('select', { class: 'inp', 'aria-label': 'Sort orders', style: 'width:200px' },
+      [['new', 'Newest first'], ['old', 'Oldest first'], ['value', 'Highest value'], ['name', 'Customer A to Z']].map(function (s) { return h('option', { value: s[0], text: s[1] }); }));
+    sortSel.addEventListener('change', function () { B.sortKey = sortSel.value; renderOrders(); });
+    B.strip = h('div', { class: 'stg', role: 'group', 'aria-label': 'Filter orders by stage' });
+    B.panelBox = h('div');
+    B.panel = h('aside', { class: 'dp', 'aria-label': 'Order details', hidden: true }, B.panelBox);
+    B.md = h('div', { class: 'md' }, h('div', null, B.oBox), B.panel);
+    root.appendChild(h('div', { class: 'ph' },
+      h('div', null, h('h1', { text: 'Orders' }), h('p', { text: 'Decide on waiting quotations, then follow each sales order through the warehouse to billing.' })),
+      h('div', { class: 'acts' }, newBtn)));
+    root.appendChild(h('section', { class: 'dq', 'aria-live': 'polite' },
+      h('div', { class: 'dq-h' }, B.qTitle, B.qCt, B.qCount, h('span', { class: 'sp2' }), B.views.el,
+        h('div', { class: 'sx grow' }, App.icon('search'), qSearch),
+        h('button', { type: 'button', class: 'btn sm', text: 'Refresh', onclick: loadQuotes })),
+      B.qBox));
+    root.appendChild(h('section', null,
+      h('div', { class: 'toolbar', style: 'margin-bottom:12px' }, h('h2', { text: 'Orders in progress' }), h('span', { class: 'mute', style: 'font-size:13.5px', text: 'Pick a stage to filter the list' })),
+      B.strip));
+    root.appendChild(h('section', { 'aria-label': 'Order list and details' },
+      h('div', { class: 'toolbar', style: 'margin-bottom:6px' }, B.histWrap,
+        h('div', { class: 'sx grow' }, App.icon('search'), oSearch), sortSel,
+        h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: loadOrders })),
+      B.oCount, B.md));
+  }
+  // ---------- new order (drawer) ----------
+  function openForm() {
+    if (!B.drawer) {
+      B.form = App.docForm({
+        mode: 'order',
+        onClose: function () { B.drawer.close(); },
+        onSaved: function () { B.drawer.close(); loadQuotes(); loadOrders(); }
+      });
+      B.drawer = App.drawer({ title: 'New order', wide: true, body: B.form.el, onopen: function () { B.form.show({}); setTimeout(function () { B.form.focus(); }, 30); } });
+    }
+    B.drawer.open();
+  }
+  function pdfLink(url) {
+    return url ? h('a', { href: url, target: '_blank', rel: 'noopener', text: 'PDF' }) : h('span', { class: 'mute', text: '-' });
+  }
+  /** PDF link plus a Make / Remake button. apiName: 'quote.pdf' (key quoteId) or 'orders.pdf' (key orderId). */
+  function pdfCell(r, apiName, key, reload) {
+    var b = h('button', { type: 'button', class: 'btn sm link', text: r.pdf ? 'Remake' : 'Make PDF' });
+    b.addEventListener('click', function () {
+      App.run(b, function () {
+        var args = {}; args[key] = r.id;
+        return App.api(apiName, args).then(function (d) {
+          App.toast('PDF ready for ' + r.no, 'ok');
+          if (d.note) App.toast(d.note, 'warn');
+          return reload();
+        });
+      });
+    });
+    return [pdfLink(r.pdf), ' ', b];
+  }
+  function daysAgo(iso) {
+    var a = Date.parse((iso || '') + 'T00:00:00Z'), b = Date.parse(App.today() + 'T00:00:00Z');
+    if (!isFinite(a) || !isFinite(b)) return '';
+    var n = Math.round((b - a) / 864e5);
+    return n <= 0 ? 'today' : n === 1 ? '1 day ago' : n + ' days ago';
+  }
+  // ---------- quotes ----------
+  function loadQuotes() {
+    var seq = ++B.qSeq, lost = B.view === 'Lost';
+    B.qCount.textContent = 'Loading…';
+    return App.api('quote.list', { search: B.qSearch, view: B.view }).then(function (d) {
+      if (seq !== B.qSeq) return;
+      if (!lost && !B.qSearch) App.setAttn('orders', { waiting: d.shown });
+      B.qCt.textContent = String(d.shown); B.qCt.hidden = lost || !d.shown;
+      B.qCount.textContent = d.shown + (lost ? (d.shown === 1 ? ' lost quotation' : ' lost quotations')
+        : (d.shown === 1 ? ' quotation' : ' quotations') + ' not converted yet');
+      App.clear(B.qBox);
+      if (!d.rows.length) B.qBox.appendChild(h('div', { class: 'dq-empty', text: lost ? 'No lost quotations.' : 'No quotations are waiting. Make one on the Make Quote tab.' }));
+      d.rows.forEach(function (r) { B.qBox.appendChild(lost ? lostRow(r) : quoteRow(r)); });
+    }).catch(function (e) {
+      if (seq !== B.qSeq) return;
+      B.qCount.textContent = '';
+      App.clear(B.qBox).appendChild(h('div', { class: 'note err', style: 'margin:16px 22px', text: 'Could not load quotations: ' + e.message }));
+    });
+  }
+  function viewBtn(r) {
+    var view = h('button', { type: 'button', class: 'btn sm', text: 'View' });
+    view.addEventListener('click', function () { App.run(view, function () { return viewQuote(r); }); });
+    return view;
+  }
+  function quoteRow(r) {
+    var left = App.daysBetween(App.today(), r.validUntil), expired = r.status === 'Expired' || (isFinite(left) && left < 0);
+    var life = expired
+      ? h('span', { class: 'life gone' }, App.icon('clock', 13), 'Expired on ' + App.fmtDate(r.validUntil))
+      : h('span', { class: 'life' + (isFinite(left) && left <= 3 ? ' soon' : '') }, App.icon('clock', 13),
+          'Valid until ' + App.fmtShort(r.validUntil) + (isFinite(left) ? ' · ' + (left === 0 ? 'last day' : left === 1 ? '1 day left' : left + ' days left') : ''));
+    var conv = h('button', { type: 'button', class: 'btn primary', style: 'height:42px', text: 'Convert to order' });
+    conv.addEventListener('click', function () { App.run(conv, function () { return convert(r); }); });
+    var lost = h('button', { type: 'button', class: 'btn sm danger', text: 'Mark lost', title: 'Customer is not responding - close this quotation as business lost' });
+    lost.addEventListener('click', function () { markLost(r); });
+    return h('div', { class: 'dq-row' },
+      h('div', null, h('div', { class: 'k', text: 'Quote no. · date' }), h('div', { class: 'big', text: r.no }), h('div', { class: 'mute', style: 'font-size:13px', text: App.fmtDate(r.date) + (daysAgo(r.date) ? ' · ' + daysAgo(r.date) : '') + ' · ' + r.lines + (r.lines === 1 ? ' item' : ' items') })),
+      h('div', null, h('div', { class: 'k', text: 'Customer / lead' }), h('div', { class: 'v' }, r.party, ' ', h('span', { class: 'badge b-blue', text: r.forType })), life),
+      h('div', null, h('div', { class: 'k', text: 'Total (incl. GST)' }), h('div', { class: 'big', text: 'Rs ' + App.inr(r.total) }), h('div', { style: 'font-size:13px' }, pdfCell(r, 'quote.pdf', 'quoteId', loadQuotes))),
+      h('div', { class: 'dq-act' }, lost, viewBtn(r), conv));
+  }
+  function lostRow(r) {
+    var re = h('button', { type: 'button', class: 'btn sm', text: 'Reopen' });
+    re.addEventListener('click', function () { App.run(re, function () { return reopen(r); }); });
+    return h('div', { class: 'dq-row' },
+      h('div', null, h('div', { class: 'k', text: 'Quote no. · date' }), h('div', { class: 'big', text: r.no }), h('div', { class: 'mute', style: 'font-size:13px', text: App.fmtDate(r.date) })),
+      h('div', null, h('div', { class: 'k', text: 'Customer / lead' }), h('div', { class: 'v' }, r.party, ' ', h('span', { class: 'badge b-blue', text: r.forType })),
+        h('div', { class: 'mute', style: 'font-size:13px;margin-top:4px', text: 'Lost on ' + App.fmtDate(r.lostOn) + (r.lostReason ? ' · ' + r.lostReason : '') })),
+      h('div', null, h('div', { class: 'k', text: 'Total (incl. GST)' }), h('div', { class: 'big', text: 'Rs ' + App.inr(r.total) }), h('div', { style: 'font-size:13px' }, pdfLink(r.pdf))),
+      h('div', { class: 'dq-act' }, viewBtn(r), re));
+  }
+  /** Show exactly one order in the Orders list (all statuses), so the person can see it is there. */
+  function pointAtOrder(no) {
+    setHistory(true, 'All');
+    B.oSearch = no; B.oSearchEl.value = no;
+    return loadOrders();
+  }
+  function setHistory(on, filter) {
+    B.stage = '';
+    if (on) { B.filter = filter || 'Dispatched'; B.histSeg.set(B.filter); } else B.filter = 'Active';
+    B.histWrap.hidden = !on;
+  }
+  function convert(q) {
+    var msg = 'Convert quotation ' + q.no + ' for ' + q.party + ' (Rs ' + App.inr(q.total) + ') into an order?';
+    if (q.forType === 'Lead') msg += ' ' + q.party + ' will be added to Customers and the lead will be marked Business Done.';
+    if (q.status === 'Expired') msg += ' Note: this quotation expired on ' + App.fmtDate(q.validUntil) + '.';
+    return App.confirm({ title: 'Convert to order', message: msg, ok: 'Convert to order' }).then(function (yes) {
+      if (!yes) return;
+      return App.api('orders.convert', { quoteId: q.id }).then(function (r) {
+        App.invalidateParties();
+        if (r.already) {
+          // it was converted a moment ago (this screen was out of date): nothing is written twice, just show the order
+          App.toast('Order ' + r.orderNo + ' already exists - it is shown in the Orders list below.', 'warn');
+          return Promise.all([loadQuotes(), pointAtOrder(r.orderNo)]);
+        }
+        App.toast('Order ' + r.orderNo + ' created' + (r.customerCreated ? ' - ' + q.party + ' added to Customers' : ''), 'ok');
+        (r.warnings || []).forEach(function (w) { App.toast(w, 'warn'); });
+        if (r.pdfError) App.toast('The sales order PDF could not be made: ' + r.pdfError + ' Press Make PDF on the order.', 'warn');
+        else if (r.pdfNote) App.toast(r.pdfNote, 'warn');
+        return Promise.all([loadQuotes(), loadOrders()]);
+      }, function (e) {
+        // whatever went wrong, the sheet may have changed part-way: show what is really there, then report the error
+        loadQuotes(); loadOrders();
+        throw e;
+      });
+    });
+  }
+  /** Close an unanswered quotation as business lost. */
+  function markLost(q) {
+    var reason = h('select', { class: 'inp' }, (App.boot.lists.lostReasons || ['No response']).map(function (x) { return h('option', { value: x, text: x }); }));
+    var note = h('input', { class: 'inp', type: 'text', maxlength: 200, placeholder: 'Optional note…' });
+    var lead = q.forType === 'Lead' ? h('input', { type: 'checkbox', checked: true }) : null;
+    App.modal({
+      title: 'Mark as business lost',
+      body: h('div', null,
+        h('p', { text: 'Close quotation ' + q.no + ' for ' + q.party + ' (Rs ' + App.inr(q.total) + ') as business lost? You can reopen it later from the Lost list.' }),
+        App.field('Reason', reason),
+        h('div', { style: 'height:8px' }),
+        App.field('Note (optional)', note),
+        lead ? h('label', { style: 'display:flex;gap:10px;align-items:center;margin-top:14px' }, lead, 'Also mark the lead as Business Lost') : null),
+      buttons: [
+        { label: 'Cancel' },
+        { label: 'Mark as lost', kind: 'danger solid', onclick: function (api, btn) {
+            App.run(btn, function () {
+              return App.api('quote.lose', { quoteId: q.id, reason: reason.value, note: note.value, markLead: lead ? lead.checked : false }).then(function (r) {
+                api.close();
+                if (r.leadLost) App.invalidateParties();
+                App.toast('Quotation ' + r.quoteNo + ' marked as lost' + (r.leadLost ? ' - lead marked Business Lost' : '') +
+                  (r.released ? ' - ' + r.released + (r.released === 1 ? ' requirement is' : ' requirements are') + ' open again' : ''), 'ok');
+                return loadQuotes();
+              });
+            });
+          } }
+      ]
+    });
+  }
+  function reopen(q) {
+    return App.confirm({ title: 'Reopen quotation', message: 'Bring quotation ' + q.no + ' for ' + q.party + ' back to the waiting list?', ok: 'Reopen' }).then(function (yes) {
+      if (!yes) return;
+      return App.api('quote.reopen', { quoteId: q.id }).then(function (r) {
+        App.invalidateParties();
+        App.toast('Quotation ' + r.quoteNo + ' is back in the waiting list', 'ok');
+        return loadQuotes();
+      });
+    });
+  }
+  // ---------- orders ----------
+  function loadOrders() {
+    var seq = ++B.oSeq;
+    B.oCount.textContent = 'Loading…';
+    return App.api('orders.list', { filter: B.filter, search: B.oSearch }).then(function (d) {
+      if (seq !== B.oSeq) return;
+      B.rows = d.rows; B.shown = d.shown;
+      if (B.filter === 'Active' && !B.oSearch) B.activeRows = d.rows; else loadActive();   // the stage strip always counts the active orders
+      renderStrip(); renderOrders();
+      if (B.sel) { var cur = null; d.rows.forEach(function (r) { if (r.id === B.sel) cur = r; }); if (cur) selectOrder(cur, true); }
+    }).catch(function (e) {
+      if (seq !== B.oSeq) return;
+      B.oCount.textContent = '';
+      App.clear(B.oBox).appendChild(h('div', { class: 'note err', text: 'Could not load orders: ' + e.message }));
+    });
+  }
+  function loadActive() {
+    return App.api('orders.list', { filter: 'Active', search: '' }).then(function (d) { B.activeRows = d.rows; renderStrip(); }).catch(function () { return null; });
+  }
+  function canCancel(o) {
+    return ['Cancelled', 'Dispatched', 'Part dispatched'].indexOf(o.stage) < 0 && ['Cancelled', 'Dispatched'].indexOf(o.status) < 0 && !o.billed;
+  }
+  function stageBadge(o) {
+    var s = o.stage || o.status, kind = 'blue';
+    if (s === 'Cancelled') kind = 'red';
+    else if (s === 'Dispatched') kind = 'green';
+    else if (s === 'Order received') kind = 'amber';
+    return App.badge(s, kind);
+  }
+  function stageIdx(s) { return { 'Order received': 1, 'To pick': 2, 'Book transport': 3, 'Part dispatched': 3, 'Dispatched': 4 }[s] || 1; }
+  // stage strip: counts and value of the ACTIVE orders, one card per stage
+  function renderStrip() {
+    var rows = B.activeRows, total = rows.length, stages = ['Order received', 'To pick', 'Book transport'];
+    rows.forEach(function (r) { var s = r.stage || r.status; if (stages.indexOf(s) < 0) stages.push(s); });
+    var all = 0; rows.forEach(function (r) { all += Number(r.total) || 0; });
+    App.clear(B.strip);
+    function card(label, count, sum, on, click, big) {
+      var b = h('button', { type: 'button', class: on ? 'on' : '', 'aria-pressed': on ? 'true' : 'false' },
+        h('div', { class: 'bar2' }, h('i', { style: 'width:' + (total ? Math.round(count / total * 100) : 0) + '%' })),
+        h('small', { text: label }), h('b', { text: big || String(count) }), h('span', { text: sum === null ? ' ' : 'Rs ' + App.inr(sum) }));
+      b.addEventListener('click', click); B.strip.appendChild(b);
+    }
+    var hist = B.filter !== 'Active';
+    card('All active', total, all, !hist && !B.stage, function () { setHistory(false); loadOrders(); });
+    stages.forEach(function (s) {
+      var list = rows.filter(function (r) { return (r.stage || r.status) === s; }), sum = 0;
+      list.forEach(function (r) { sum += Number(r.total) || 0; });
+      card(s, list.length, sum, !hist && B.stage === s, function () { var wasHist = B.filter !== 'Active'; setHistory(false); B.stage = s; if (wasHist) loadOrders(); else { renderStrip(); renderOrders(); } });
+    });
+    card('Dispatched · Cancelled', 0, null, hist, function () { setHistory(true, 'Dispatched'); loadOrders(); }, 'History');
+  }
+  function sortedRows() {
+    var rows = B.rows.filter(function (r) { return !B.stage || (r.stage || r.status) === B.stage; }), k = B.sortKey;
+    if (k === 'old') rows = rows.slice().reverse();
+    else if (k === 'value') rows = rows.slice().sort(function (a, b) { return (Number(b.total) || 0) - (Number(a.total) || 0); });
+    else if (k === 'name') rows = rows.slice().sort(function (a, b) { return String(a.customer).toLowerCase().localeCompare(String(b.customer).toLowerCase()); });
+    return rows;
+  }
+  function renderOrders() {
+    var rows = sortedRows();
+    B.oCount.textContent = B.shown > B.rows.length
+      ? 'Showing the newest ' + B.rows.length + ' of ' + B.shown + ' orders - use search to narrow down.'
+      : rows.length + (rows.length === 1 ? ' order' : ' orders') + (B.stage ? ' at ' + B.stage : '');
+    App.clear(B.oBox);
+    if (!rows.length) { B.oBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: B.filter === 'Active' ? 'No active orders.' : 'No orders found.' }))); return; }
+    var head = h('tr', null, h('th', { text: 'Order' }), h('th', { text: 'Customer' }), h('th', { text: 'Progress' }), h('th', { class: 'num', text: 'Total (incl. GST)' }), h('th', { text: 'Billing' }), h('th', null, h('span', { class: 'sr', text: 'More' })));
+    var body = h('tbody');
+    rows.forEach(function (r) { body.appendChild(orderRow(r)); });
+    B.oBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), body)));
+  }
+  function orderRow(r) {
+    var s = r.stage || r.status, n = stageIdx(s), steps = [];
+    for (var i = 1; i <= 4; i++) steps.push(h('i', { class: i <= n && s !== 'Cancelled' ? 'on' : '' }));
+    var no = h('button', { type: 'button', class: 'ordno', text: r.no, 'aria-label': 'Open order ' + r.no });
+    no.addEventListener('click', function () { App.run(no, function () { return selectOrder(r); }); });
+    var more = h('button', { type: 'button', class: 'x', 'aria-label': 'More actions for ' + r.no }, App.icon('dots', 18));
+    more.addEventListener('click', function () {
+      var items = [{ hd: 'Order ' + r.no }, { label: 'View details', onclick: function () { selectOrder(r); } }];
+      if (r.pdf) items.push({ label: 'Open sales order PDF', onclick: function () { window.open(r.pdf, '_blank', 'noopener'); } });
+      items.push({ label: r.pdf ? 'Remake PDF' : 'Make PDF', onclick: function () { makePdf(r); } });
+      if (canCancel(r)) items.push({ label: 'Cancel order', danger: true, onclick: function () { App.run(more, function () { return cancelOrder(r); }); } });
+      App.menu(more, items);
+    });
+    var tr = h('tr', { class: 'click' + (B.sel === r.id ? ' sel' : ''), 'data-id': r.id },
+      h('td', { 'data-l': 'Order' }, no, h('span', { class: 'sub', text: App.fmtDate(r.date) }), r.pdf ? null : h('span', { class: 'flag' }, App.icon('alert', 11), 'No PDF yet')),
+      h('td', { 'data-l': 'Customer' }, r.customer, h('span', { class: 'sub', text: r.lines + (r.lines === 1 ? ' item' : ' items') })),
+      h('td', { 'data-l': 'Progress' }, s === 'Cancelled' || s === 'Dispatched' ? stageBadge(r) : [h('div', { class: 'stp', 'aria-hidden': 'true' }, steps), h('span', { class: 'stl', text: s })],
+        r.dispatchDate ? h('span', { class: 'sub', text: 'Dispatched ' + App.fmtDate(r.dispatchDate) }) : null),
+      h('td', { class: 'num', 'data-l': 'Total', text: 'Rs ' + App.inr(r.total) }),
+      h('td', { 'data-l': 'Billing' }, r.voucher ? 'Bill ' + r.voucher : h('span', { class: 'mute', text: 'Not billed' }), r.payStatus ? h('span', { class: 'sub', text: r.payStatus }) : null),
+      h('td', { class: 'acts' }, more));
+    tr.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('button,a')) return; selectOrder(r); });
+    return tr;
+  }
+  function makePdf(r) {
+    return App.api('orders.pdf', { orderId: r.id }).then(function (d) {
+      App.toast('PDF ready for ' + r.no, 'ok');
+      if (d.note) App.toast(d.note, 'warn');
+      return loadOrders();
+    }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function cancelOrder(o) {
+    return App.confirm({
+      title: 'Cancel order', danger: true, ok: 'Cancel order', cancel: 'Keep it',
+      message: 'Cancel order ' + o.no + ' for ' + o.customer + '? Warehouse will stop working on it.'
+    }).then(function (yes) {
+      if (!yes) return;
+      return App.api('orders.cancel', { orderId: o.id }).then(function (r) {
+        App.toast('Order ' + r.orderNo + ' cancelled', 'ok');
+        return loadOrders();
+      });
+    });
+  }
+  // ---------- details ----------
+  function linesTable(lines) {
+    var cols = [
+      { h: '#', f: function (l) { return lines.indexOf(l) + 1; } },
+      { h: 'Item', f: function (l) { return [l.desc, l.code ? h('span', { class: 'sub', text: l.code }) : null]; } },
+      { h: 'Pcs x sets', cls: 'num', f: function (l) { return l.pcs + ' × ' + l.sets + ' = ' + Math.round(l.pcs * l.sets * 100) / 100; } },
+      { h: 'Rate Rs/pc', cls: 'num', f: function (l) { return App.inr(l.offer); } },
+      { h: 'GST', cls: 'num', f: function (l) { return l.gst + '%'; } },
+      { h: 'Amount excl. GST', cls: 'num', f: function (l) { return App.inr(l.taxable); } }
+    ];
+    return App.table(cols, lines, 'No lines.');
+  }
+  function totalsBar(d) {
+    return h('div', { class: 'totals' },
+      h('span', null, 'Taxable', h('b', { text: 'Rs ' + App.inr(d.taxable) })),
+      h('span', null, 'GST', h('b', { text: 'Rs ' + App.inr(d.gstTotal) })),
+      h('span', null, 'Total', h('b', { text: 'Rs ' + App.inr(d.total) })));
+  }
+  /** "Open PDF" link (when there is one) and a Make / Remake button, both kept in step. */
+  function pdfControl(url, apiName, args, reload) {
+    var box = h('span', { style: 'display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap' });
+    function paint(u) {
+      var b = h('button', { type: 'button', class: 'btn sm', text: u ? 'Remake PDF' : 'Make PDF' });
+      b.addEventListener('click', function () {
+        App.run(b, function () {
+          return App.api(apiName, args).then(function (r) { paint(r.url); if (r.note) App.toast(r.note, 'warn'); reload(); });
+        });
+      });
+      App.clear(box);
+      if (u) box.appendChild(h('a', { class: 'btn sm primary', href: u, target: '_blank', rel: 'noopener', text: 'Open PDF' }));
+      box.appendChild(b);
+    }
+    paint(url);
+    return box;
+  }
+  function viewQuote(q) {
+    return App.api('quote.get', { quoteId: q.id }).then(function (d) {
+      var info = h('dl', { class: 'kv' },
+        h('dt', { text: 'For' }), h('dd', { text: d.party + ' (' + d.forType + ')' }),
+        h('dt', { text: 'Date' }), h('dd', { text: App.fmtDate(d.date) + (d.validUntil ? ' · valid until ' + App.fmtDate(d.validUntil) : '') }),
+        h('dt', { text: 'Payment' }), h('dd', { text: d.payment || '-' }),
+        h('dt', { text: 'Delivery' }), h('dd', { text: d.delivery || '-' }),
+        d.lostOn || d.lostReason ? h('dt', { text: 'Lost' }) : null,
+        d.lostOn || d.lostReason ? h('dd', { text: App.fmtDate(d.lostOn) + (d.lostReason ? ' · ' + d.lostReason : '') }) : null,
+        h('dt', { text: 'PDF' }), h('dd', null, pdfControl(d.pdf, 'quote.pdf', { quoteId: q.id }, loadQuotes)));
+      App.modal({
+        title: 'Quotation ' + d.no, wide: true, body: h('div', null, info, linesTable(d.lines), totalsBar(d)),
+        buttons: [{ label: 'Close' }]
+      });
+    });
+  }
+  /** Order details open in the side panel (they used to open in a pop-up). Same server call: orders.get. */
+  function selectOrder(o, quiet) {
+    B.sel = o.id;
+    Array.prototype.forEach.call(B.oBox.querySelectorAll('tr.click'), function (tr) { tr.classList.toggle('sel', tr.getAttribute('data-id') === o.id); });
+    B.panel.hidden = false; B.md.classList.add('has-panel');
+    if (!quiet) { App.clear(B.panelBox).appendChild(h('div', { class: 'dp-b', text: 'Loading…' })); }
+    return App.api('orders.get', { orderId: o.id }).then(function (d) {
+      if (B.sel !== o.id) return;
+      renderPanel(o, d);
+      if (!quiet && window.innerWidth <= 1180 && B.panel.scrollIntoView) B.panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function closePanel() {
+    B.sel = ''; B.panel.hidden = true; B.md.classList.remove('has-panel');
+    Array.prototype.forEach.call(B.oBox.querySelectorAll('tr.sel'), function (tr) { tr.classList.remove('sel'); });
+  }
+  function timeline(o) {
+    var s = o.stage || o.status, n = stageIdx(s), ol = h('ol', { class: 'tl' });
+    if (s === 'Cancelled') return h('div', { class: 'note err', text: 'This order was cancelled.' });
+    STAGES.forEach(function (st, i) {
+      var cls = i + 1 < n || (st === 'Dispatched' && n === 4) ? 'done' : i + 1 === n ? 'now' : 'up';
+      var when = i === 0 ? App.fmtShort(o.date) : (st === 'Dispatched' && o.dispatchDate ? App.fmtShort(o.dispatchDate) : (cls === 'now' ? 'now' : ''));
+      ol.appendChild(h('li', { class: cls }, h('span', { class: 'd', text: cls === 'done' ? '✓' : '' }), h('span', null, h('b', { text: st === s && s === 'Part dispatched' ? 'Part dispatched' : st })), h('span', { class: 'when', text: when })));
+    });
+    ol.appendChild(h('li', { class: o.voucher ? 'done' : 'up' }, h('span', { class: 'd', text: o.voucher ? '✓' : '' }),
+      h('span', null, h('b', { text: o.voucher ? 'Billed · Bill ' + o.voucher : 'Billing' }), o.payStatus ? h('div', { class: 'when', text: o.payStatus }) : null), h('span', { class: 'when' })));
+    return ol;
+  }
+  function renderPanel(o, d) {
+    var info = h('dl', { class: 'kv' },
+      h('dt', { text: 'Customer' }), h('dd', null, h('b', { text: o.customer })),
+      h('dt', { text: 'Date' }), h('dd', { text: App.fmtDate(d.date) }),
+      h('dt', { text: 'Payment' }), h('dd', { text: o.payment || '-' }),
+      h('dt', { text: 'Delivery' }), h('dd', { text: o.delivery || '-' }));
+    var lines = h('div', { class: 'ln' }, (d.lines || []).map(function (l) {
+      return h('div', null, h('span', null, l.desc, h('small', { class: 'mute', text: (l.code ? l.code + ' · ' : '') + l.pcs + ' × ' + l.sets + ' = ' + Math.round(l.pcs * l.sets * 100) / 100 + ' pcs · Rs ' + App.inr(l.offer) + ' · GST ' + l.gst + '%' })), h('span', { class: 'a', text: App.inr(l.taxable) }));
+    }));
+    var foot = h('div', { class: 'dp-f' }, pdfControl(o.pdf, 'orders.pdf', { orderId: o.id }, loadOrders), h('span', { style: 'flex:1' }));
+    if (canCancel(o)) {
+      var cb = h('button', { type: 'button', class: 'btn sm danger', text: 'Cancel order' });
+      cb.addEventListener('click', function () { App.run(cb, function () { return cancelOrder(o); }); });
+      foot.appendChild(cb);
+    }
+    App.clear(B.panelBox).appendChild(h('div', null,
+      h('div', { class: 'dp-h' }, h('div', null, h('div', { class: 'kk', text: 'Order' }), h('h3', { text: o.no })),
+        h('div', { style: 'display:flex;gap:8px;align-items:center' }, stageBadge(o), h('button', { type: 'button', class: 'x', 'aria-label': 'Close details', onclick: closePanel }, App.icon('close', 18)))),
+      h('div', { class: 'dp-b' }, info,
+        h('div', null, h('div', { class: 'lbl', style: 'margin-bottom:10px', text: 'Where it is' }), timeline(o)),
+        h('div', null, h('div', { class: 'lbl', style: 'margin-bottom:8px', text: (d.lines || []).length + ((d.lines || []).length === 1 ? ' item' : ' items') }), lines),
+        h('div', { class: 'dtot' },
+          h('div', null, h('span', { class: 'mute', text: 'Taxable value' }), h('span', { text: 'Rs ' + App.inr(d.taxable) })),
+          h('div', null, h('span', { class: 'mute', text: 'GST' }), h('span', { text: 'Rs ' + App.inr(d.gstTotal) })),
+          h('div', { class: 'g' }, h('span', { text: 'Total' }), h('span', { text: 'Rs ' + App.inr(d.total) })))),
+      foot));
+  }
+  App.register('orders', 'Orders', {
+    init: init,
+    show: function (p) {
+      App.refreshLookups();
+      if (p && p.search) {
+        B.qSearch = p.search; B.qSearchEl.value = p.search;
+        setHistory(true, 'All'); B.oSearch = p.search; B.oSearchEl.value = p.search;
+      }
+      loadQuotes(); loadOrders();
+    }
+  });
+})();
+</script>

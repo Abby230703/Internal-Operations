@@ -1,0 +1,759 @@
+<script>
+/* Client.html - shared plumbing for every board: server calls, DOM helper, toasts,
+   pop-ups, type-ahead, formats, tab navigation. No board logic lives here.
+   Design update: shell (department menu, search, bell), drawer, popover menu, Customer|Lead switch, tab counts. */
+(function () {
+  'use strict';
+  var App = window.App = {
+    boards: {}, order: [], boot: null, current: '',
+    partyList: null, productList: null, _parties: null, _products: null
+  };
+  var noop = function () {};
+  // ---------- DOM helper (text is always set as text, never as HTML) ----------
+  function add(el, c) {
+    if (c === null || c === undefined || c === false) return;
+    if (Array.isArray(c)) { c.forEach(function (x) { add(el, x); }); return; }
+    el.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  var h = App.h = function (tag, attrs) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      var v = attrs[k];
+      if (v === null || v === undefined || v === false) return;
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k.slice(0, 2) === 'on' && typeof v === 'function') el.addEventListener(k.slice(2), v);
+      else if (k === 'value' || k === 'checked' || k === 'disabled' || k === 'selected' || k === 'readOnly') el[k] = v;
+      else el.setAttribute(k, v === true ? '' : v);
+    });
+    for (var i = 2; i < arguments.length; i++) add(el, arguments[i]);
+    return el;
+  };
+  App.clear = function (el) { while (el.firstChild) el.removeChild(el.firstChild); return el; };
+  App.byId = function (id) { return document.getElementById(id); };
+  // ---------- icons (small line icons, built with the DOM so nothing is parsed as HTML) ----------
+  var ICONS = {
+    leads: [['circle', { cx: 9, cy: 8, r: 3.5 }], ['path', { d: 'M2.5 20c.6-3.4 3.2-5.5 6.5-5.5s5.9 2.1 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .7 3.2 2.4 3.5 5.2' }]],
+    requirements: [['rect', { x: 6, y: 4, width: 12, height: 17, rx: 2 }], ['path', { d: 'M9 4V3h6v1M9 10h6M9 14h4' }]],
+    quote: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5M9 13h6M9 17h4' }]],
+    orders: [['path', { d: 'M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8' }]],
+    plus: [['path', { d: 'M12 5v14M5 12h14' }]],
+    close: [['path', { d: 'M6 6l12 12M18 6 6 18' }]],
+    search: [['circle', { cx: 11, cy: 11, r: 7 }], ['path', { d: 'm20 20-3.5-3.5' }]],
+    list: [['path', { d: 'M4 6h16M4 12h16M4 18h16' }]],
+    board: [['rect', { x: 3.5, y: 4, width: 5, height: 16, rx: 1.5 }], ['rect', { x: 10.5, y: 4, width: 5, height: 10, rx: 1.5 }], ['rect', { x: 17.5, y: 4, width: 3, height: 13, rx: 1.5 }]],
+    clock: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M12 7v5l3 2' }]],
+    info: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M12 11v5M12 8h.01' }]],
+    alert: [['path', { d: 'M12 8v5M12 17h.01' }]],
+    dots: [['circle', { cx: 5, cy: 12, r: 1.6 }], ['circle', { cx: 12, cy: 12, r: 1.6 }], ['circle', { cx: 19, cy: 12, r: 1.6 }]],
+    trend: [['path', { d: 'M3 17l6-6 4 4 8-8' }], ['path', { d: 'M15 7h6v6' }]],
+    check: [['path', { d: 'm5 12 5 5 9-10' }]]
+  };
+  App.icon = function (name, size) {
+    var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'ico'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true');
+    if (size) { svg.setAttribute('width', size); svg.setAttribute('height', size); }
+    (ICONS[name] || []).forEach(function (p) {
+      var n = document.createElementNS(ns, p[0]);
+      Object.keys(p[1]).forEach(function (k) { n.setAttribute(k, p[1][k]); });
+      if (name === 'dots') n.setAttribute('fill', 'currentColor');
+      svg.appendChild(n);
+    });
+    return svg;
+  };
+  /** "Abhilasha Enterprises" -> "AE" */
+  App.initials = function (s) {
+    var w = String(s || '').trim().split(/\s+/).filter(Boolean);
+    if (!w.length) return '?';
+    return (w[0].charAt(0) + (w.length > 1 ? w[1].charAt(0) : (w[0].charAt(1) || ''))).toUpperCase();
+  };
+  // ---------- formats ----------
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  App.fmtDate = function (iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? (+m[3]) + ' ' + MON[+m[2] - 1] + ' ' + m[1] : '';
+  };
+  App.fmtShort = function (iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? (+m[3]) + ' ' + MON[+m[2] - 1] : '';
+  };
+  /** whole days from a to b (ISO dates); b - a */
+  App.daysBetween = function (a, b) {
+    var x = Date.parse((a || '') + 'T00:00:00Z'), y = Date.parse((b || '') + 'T00:00:00Z');
+    return isFinite(x) && isFinite(y) ? Math.round((y - x) / 864e5) : NaN;
+  };
+  App.inr = function (n, dec) {
+    n = Number(n); if (!isFinite(n)) n = 0;
+    dec = dec === undefined ? 2 : dec;
+    var neg = n < 0; n = Math.abs(n);
+    var f = n.toFixed(dec).split('.'), ip = f[0], last3 = ip.slice(-3), rest = ip.slice(0, -3);
+    if (rest) last3 = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + last3;
+    return (neg ? '-' : '') + last3 + (dec ? '.' + f[1] : '');
+  };
+  App.num = function (v) {
+    if (typeof v === 'number') return isFinite(v) ? v : NaN;
+    var t = String(v === null || v === undefined ? '' : v).replace(/[,\s]/g, '');
+    if (t === '') return NaN;
+    var n = Number(t);
+    return isFinite(n) ? n : NaN;
+  };
+  App.r2 = function (n) { return Math.round((Number(n) + 1e-9) * 100) / 100; };
+  App.r4 = function (n) { return Math.round((Number(n) + 1e-9) * 10000) / 10000; };
+  App.today = function () { return App.boot ? App.boot.today : new Date().toISOString().slice(0, 10); };
+  // ---------- quantity: pieces or sets ----------
+  /** 12 -> "12", 0.83333 -> "0.8333" */
+  App.fmtQty = function (n) { n = Number(n); return isFinite(n) ? String(Math.round(n * 10000) / 10000) : ''; };
+  /**
+   * Two linked boxes: pieces and sets. The sheet stores sets (a part-set is a fraction of a set), but people
+   * may type either one. Whichever box was typed in last is the truth; the other is worked out from it.
+   * o: { perSet() -> pieces in one set (unknown or below 1 counts as 1), cls, onChange() }
+   * Returns { pcs, sets (the two inputs), get() -> {pcs, sets, perSet} | null, setSets(n), refresh(), clear() }
+   */
+  App.qty = function (o) {
+    o = o || {};
+    var anchor = 'sets';
+    function box(ph) { return h('input', { class: o.cls || 'inp', type: 'number', min: 0, step: 'any', inputmode: 'decimal', placeholder: ph }); }
+    var pcs = box('Pieces'), sets = box('Sets');
+    function per() { var p = o.perSet ? App.num(o.perSet()) : 1; return p >= 1 ? p : 1; }
+    function refresh() {
+      var p = per();
+      if (anchor === 'pcs') { var n = App.num(pcs.value); sets.value = n > 0 ? App.fmtQty(n / p) : ''; }
+      else { var s = App.num(sets.value); pcs.value = s > 0 ? App.fmtQty(s * p) : ''; }
+    }
+    function changed() { if (o.onChange) o.onChange(); }
+    pcs.addEventListener('input', function () { anchor = 'pcs'; refresh(); changed(); });
+    sets.addEventListener('input', function () { anchor = 'sets'; refresh(); changed(); });
+    return {
+      pcs: pcs, sets: sets, refresh: refresh,
+      get: function () {
+        var p = per();
+        if (anchor === 'pcs') { var n = App.num(pcs.value); return n > 0 ? { pcs: n, sets: n / p, perSet: p } : null; }
+        var s = App.num(sets.value); return s > 0 ? { pcs: s * p, sets: s, perSet: p } : null;
+      },
+      /** Fill from a saved number of sets. A part-set is shown as whole pieces so nothing looks odd. */
+      setSets: function (n) {
+        n = Number(n);
+        if (!(n > 0)) { anchor = 'sets'; pcs.value = ''; sets.value = ''; return; }
+        if (Math.abs(n - Math.round(n)) < 1e-9) { anchor = 'sets'; sets.value = App.fmtQty(n); }
+        else { anchor = 'pcs'; pcs.value = App.fmtQty(n * per()); }
+        refresh();
+      },
+      clear: function () { anchor = 'sets'; pcs.value = ''; sets.value = ''; }
+    };
+  };
+  /** Saved sets -> text for tables: { main: "72 pcs", sub: "12 sets of 6" }. Needs the product list for pieces-per-set. */
+  App.qtyOf = function (sets, code) {
+    var s = Number(sets);
+    if (!(s > 0)) return { main: '', sub: '' };
+    var p = code ? App.findProduct(code) : null;
+    if (code && !App.productList) return { main: App.fmtQty(s) + ' sets', sub: '' };
+    var per = p && p.pcs >= 1 ? p.pcs : 1;
+    return { main: App.fmtQty(s * per) + ' pcs', sub: per > 1 ? App.fmtQty(s) + ' sets of ' + per : '' };
+  };
+  // ---------- pictures ----------
+  /**
+   * Picture file from a file box -> Promise<{ name, data }>. data = base64 JPEG, shrunk to 600 px on the long side
+   * (a product picture on a quotation is only a couple of centimetres wide, and a small upload is fast).
+   */
+  App.readPhoto = function (file) {
+    return new Promise(function (resolve, reject) {
+      if (!file) { reject(new Error('Choose a picture first.')); return; }
+      if (!/^image\//i.test(file.type || '')) { reject(new Error('Please choose a picture (JPG or PNG).')); return; }
+      if (file.size > 25 * 1024 * 1024) { reject(new Error('That picture is too large. Please use one under 25 MB.')); return; }
+      var url = URL.createObjectURL(file), img = new Image();
+      function drop() { try { URL.revokeObjectURL(url); } catch (e) { noop(); } }
+      img.onload = function () {
+        try {
+          var w = img.naturalWidth || img.width, hh = img.naturalHeight || img.height;
+          if (!(w > 0 && hh > 0)) throw new Error('empty');
+          var k = Math.min(1, 600 / Math.max(w, hh)), c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(hh * k));
+          var g = c.getContext('2d');
+          g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height);   // transparent PNGs get a white background
+          g.drawImage(img, 0, 0, c.width, c.height);
+          var data = c.toDataURL('image/jpeg', 0.85).split(',')[1];
+          drop();
+          if (!data) throw new Error('empty');
+          resolve({ name: file.name || 'picture.jpg', data: data });
+        } catch (e) { drop(); reject(new Error('Could not read that picture. Please use a JPG or PNG.')); }
+      };
+      img.onerror = function () { drop(); reject(new Error('Could not read that picture. Please use a JPG or PNG.')); };
+      img.src = url;
+    });
+  };
+  // ---------- server calls: always resolve with data, or reject with a readable Error ----------
+  App.api = function (name, args) {
+    return new Promise(function (resolve, reject) {
+      if (!window.google || !google.script || !google.script.run) {
+        reject(new Error('Open this page from the deployed web-app link (not from the editor).'));
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(function (txt) {
+          var r;
+          try { r = JSON.parse(txt); } catch (e) { r = null; }
+          if (!r) { reject(new Error('The server gave no reply. Please try again.')); return; }
+          if (r.ok) resolve(r.data); else reject(new Error(r.error || 'Something went wrong.'));
+        })
+        .withFailureHandler(function (err) {
+          reject(new Error(err && err.message ? err.message : 'Could not reach the server.'));
+        })
+        .api(name, JSON.stringify(args || {}));
+    });
+  };
+  // ---------- messages ----------
+  App.toast = function (msg, kind) {
+    var box = App.byId('toasts'), t, timer;
+    function kill() { clearTimeout(timer); if (t.parentNode) t.parentNode.removeChild(t); }
+    t = h('div', { class: 'toast ' + (kind || 'ok') }, h('span', { text: msg }),
+      h('button', { class: 'x', type: 'button', 'aria-label': 'Close', onclick: kill, text: '×' }));
+    box.appendChild(t);
+    timer = setTimeout(kill, kind === 'err' ? 10000 : 4500);
+  };
+  /** Run fn (returns a promise) while the button is disabled. Errors become a red toast. */
+  App.run = function (btn, fn) {
+    if (btn.disabled) return Promise.resolve();
+    btn.disabled = true; btn.classList.add('busy');
+    function done() { btn.disabled = false; btn.classList.remove('busy'); }
+    return Promise.resolve().then(fn).then(function (v) { done(); return v; }, function (e) {
+      done(); App.toast(e && e.message ? e.message : String(e), 'err');
+    });
+  };
+  // ---------- pop-ups (no alert/confirm: they are blocked in some browsers) ----------
+  var modals = [], drawers = [];
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (modals.length) modals[modals.length - 1].close();
+    else if (drawers.length) drawers[drawers.length - 1].close();
+  });
+  /** opts: { title, body (node), buttons:[{label, kind, onclick(api, btn)}], wide, onclose } */
+  App.modal = function (opts) {
+    var root = App.byId('modal-root'), closed = false;
+    var back = h('div', { class: 'backdrop' });
+    var api = { el: null, body: null, close: close };
+    function close() {
+      if (closed) return; closed = true;
+      var i = modals.indexOf(api); if (i >= 0) modals.splice(i, 1);
+      if (back.parentNode) back.parentNode.removeChild(back);
+      if (opts.onclose) opts.onclose();
+    }
+    var body = h('div', { class: 'mbody' }, opts.body);
+    var foot = h('div', { class: 'mfoot' });
+    (opts.buttons || []).forEach(function (b) {
+      var btn = h('button', { type: 'button', class: 'btn ' + (b.kind || ''), text: b.label });
+      btn.addEventListener('click', function () { if (b.onclick) b.onclick(api, btn); else close(); });
+      foot.appendChild(btn);
+    });
+    var box = h('div', { class: 'modal' + (opts.wide ? ' wide' : ''), role: 'dialog', 'aria-modal': 'true' },
+      h('div', { class: 'mhead' }, h('h3', { text: opts.title || '' }),
+        h('button', { class: 'x', type: 'button', 'aria-label': 'Close', onclick: close, text: '×' })),
+      body, (opts.buttons && opts.buttons.length) ? foot : null);
+    back.appendChild(box);
+    back.addEventListener('mousedown', function (e) { if (e.target === back) close(); });
+    root.appendChild(back);
+    api.el = box; api.body = body; modals.push(api);
+    var first = foot.querySelector('.primary') || foot.querySelector('.danger') || foot.querySelector('button');
+    if (first) first.focus();
+    return api;
+  };
+  /** opts: { title, message (text or node), ok, cancel, danger } -> Promise<boolean> */
+  App.confirm = function (opts) {
+    return new Promise(function (resolve) {
+      var decided = false;
+      function fin(v, api) { decided = true; resolve(v); api.close(); }
+      App.modal({
+        title: opts.title || 'Please confirm',
+        body: typeof opts.message === 'string' ? h('p', { text: opts.message }) : opts.message,
+        buttons: [
+          { label: opts.cancel || 'Cancel', onclick: function (api) { fin(false, api); } },
+          { label: opts.ok || 'Yes', kind: opts.danger ? 'danger' : 'primary', onclick: function (api) { fin(true, api); } }
+        ],
+        onclose: function () { if (!decided) resolve(false); }
+      });
+    });
+  };
+  /**
+   * Side drawer (New lead, New order). o: { title, sub, body (node), footer (node or array), wide, onopen, onclose }
+   * Returns { el, body, open(), close(), isOpen() }. The body nodes stay alive between openings, so half-typed forms survive a close.
+   */
+  App.drawer = function (o) {
+    var root = App.byId('drawer-root'), opened = false, back = null;
+    var scrim = h('div', { class: 'scrim' });
+    var api = { el: null, body: null, open: open, close: close, isOpen: function () { return opened; } };
+    function close() {
+      if (!opened) return; opened = false;
+      var i = drawers.indexOf(api); if (i >= 0) drawers.splice(i, 1);
+      if (scrim.parentNode) scrim.parentNode.removeChild(scrim);
+      if (box.parentNode) box.parentNode.removeChild(box);
+      if (o.onclose) o.onclose();
+      if (back && back.focus) { try { back.focus(); } catch (e) { noop(); } }
+    }
+    function open() {
+      if (opened) return; opened = true; back = document.activeElement;
+      root.appendChild(scrim); root.appendChild(box); drawers.push(api);
+      if (o.onopen) o.onopen();
+    }
+    scrim.addEventListener('mousedown', close);
+    var body = h('div', { class: 'drawer-b' }, o.body);
+    var foot = o.footer ? h('div', { class: 'drawer-f' }, o.footer) : null;
+    var box = h('aside', { class: 'drawer' + (o.wide ? ' wide' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': o.title || '' },
+      h('div', { class: 'drawer-h' },
+        h('div', null, h('h2', { text: o.title || '' }), o.sub ? h('p', { text: o.sub }) : null),
+        h('button', { class: 'x', type: 'button', 'aria-label': 'Close', onclick: close }, App.icon('close', 18))),
+      body, foot);
+    api.el = box; api.body = body;
+    return api;
+  };
+  /**
+   * Small pop-up menu next to a button. items: [{ label, onclick, danger, disabled, hd }]. One menu at a time; closes on outside click, Escape or scroll.
+   */
+  var openMenu = null;
+  App.closeMenu = function () { if (openMenu) { openMenu.close(); openMenu = null; } };
+  App.menu = function (anchor, items) {
+    App.closeMenu();
+    var el = h('div', { class: 'pmenu', role: 'menu' });
+    items.forEach(function (it) {
+      if (it.hd) { el.appendChild(h('div', { class: 'hd', text: it.hd })); return; }
+      var b = h('button', { type: 'button', role: 'menuitem', class: it.danger ? 'danger' : '', text: it.label, disabled: !!it.disabled });
+      b.addEventListener('click', function () { App.closeMenu(); if (it.onclick) it.onclick(); });
+      el.appendChild(b);
+    });
+    document.body.appendChild(el);
+    var r = anchor.getBoundingClientRect(), w = el.offsetWidth, hh = el.offsetHeight;
+    var left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+    var top = r.bottom + 6; if (top + hh > window.innerHeight - 8) top = Math.max(8, r.top - hh - 6);
+    el.style.left = left + 'px'; el.style.top = top + 'px';
+    function onDown(e) { if (!el.contains(e.target)) App.closeMenu(); }
+    function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); App.closeMenu(); } }
+    function onScroll() { App.closeMenu(); }
+    setTimeout(function () { document.addEventListener('mousedown', onDown, true); }, 0);
+    document.addEventListener('keydown', onKey, true); window.addEventListener('scroll', onScroll, true);
+    var first = el.querySelector('button:not([disabled])'); if (first) first.focus();
+    openMenu = { close: function () {
+      document.removeEventListener('mousedown', onDown, true); document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('scroll', onScroll, true);
+      if (el.parentNode) el.parentNode.removeChild(el);
+      try { anchor.focus(); } catch (e) { noop(); }
+    } };
+    return openMenu;
+  };
+  // ---------- small widgets ----------
+  App.badge = function (text, kind) { return h('span', { class: 'badge' + (kind ? ' b-' + kind : ''), text: text }); };
+  App.field = function (label, control, o) {
+    o = o || {};
+    return h('div', { class: 'field' + (o.cls ? ' ' + o.cls : '') },
+      h('label', null, label, o.required ? h('span', { class: 'req', text: ' *' }) : null),
+      control, o.hint || null);
+  };
+  /** Segmented buttons. o: { options:[{v,label}], value, onChange(v), cls (e.g. 'chips-s' for round filter chips), label (for screen readers) } */
+  App.seg = function (o) {
+    var cur = o.value, btns = {}, el = h('div', { class: 'seg' + (o.cls ? ' ' + o.cls : ''), role: 'group', 'aria-label': o.label || null });
+    function paint() { Object.keys(btns).forEach(function (k) { btns[k].classList.toggle('on', k === cur); btns[k].setAttribute('aria-pressed', k === cur ? 'true' : 'false'); }); }
+    o.options.forEach(function (op) {
+      var b = h('button', { type: 'button', class: 'seg-b', text: op.label });
+      b.addEventListener('click', function () { if (cur === op.v) return; cur = op.v; paint(); if (o.onChange) o.onChange(cur); });
+      btns[op.v] = b; el.appendChild(b);
+    });
+    paint();
+    return { el: el, get: function () { return cur; }, set: function (v) { cur = v; paint(); } };
+  };
+  /**
+   * Customer | Lead switch that sits on the field's own label row. The option not chosen is greyed.
+   * Same API as App.seg. o: { options:[{v,label}], value, onChange(v), label }
+   */
+  App.kind = function (o) {
+    var cur = o.value, btns = {}, el = h('div', { class: 'kind', role: 'radiogroup', 'aria-label': o.label || 'Customer or lead' });
+    function paint() { Object.keys(btns).forEach(function (k) { btns[k].classList.toggle('on', k === cur); btns[k].setAttribute('aria-checked', k === cur ? 'true' : 'false'); }); }
+    o.options.forEach(function (op) {
+      var b = h('button', { type: 'button', role: 'radio', class: 'kind-b', text: op.label });
+      b.addEventListener('click', function () { if (cur === op.v) return; cur = op.v; paint(); if (o.onChange) o.onChange(cur); });
+      btns[op.v] = b; el.appendChild(b);
+    });
+    paint();
+    return { el: el, get: function () { return cur; }, set: function (v) { cur = v; paint(); } };
+  };
+  /** Table. cols: [{ h, cls, f(row) -> node|text }] */
+  App.table = function (cols, rows, emptyText) {
+    if (!rows.length) return h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: emptyText || 'Nothing here yet.' }));
+    var head = h('tr', null, cols.map(function (c) { return h('th', { class: c.cls || '', text: c.h }); }));
+    var body = rows.map(function (r) {
+      return h('tr', null, cols.map(function (c) { return h('td', { class: c.cls || '', 'data-l': c.h || null }, c.f(r)); }));
+    });
+    return h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), h('tbody', null, body)));
+  };
+  /**
+   * Type-ahead picker.
+   * o: { placeholder, items() -> array|null, label(item), sub(item), keywords(item), codeOf(item), allowFree, max, noun, onPick(item), onInput(text) }
+   * none = text (or function(typed) -> text) shown when nothing matches. keywords = extra words that are searched but not shown. max = rows listed at once (default 40); when more rows match, a
+   * footer says "Showing N of M <noun>" so the list never looks like it is cut short. noun defaults to "matches".
+   * With allowFree, text that matches nothing is returned as { free:true, name }.
+   */
+  App.combo = function (o) {
+    var input = h('input', { type: 'text', class: 'inp', placeholder: o.placeholder || 'Type to search…', autocomplete: 'off' });
+    var list = h('div', { class: 'combo-list', hidden: true });
+    var el = h('div', { class: 'combo' }, input, list);
+    var selected = null, shown = [], rows = [], active = 0, isOpen = false;
+    var keys = typeof WeakMap === 'function' ? new WeakMap() : null;
+    function labelOf(it) { return o.label(it); }
+    function keyOf(it) {
+      var k = keys ? keys.get(it) : undefined;
+      if (k === undefined) {
+        k = (labelOf(it) + ' ' + (o.sub ? o.sub(it) : '') + ' ' + (o.keywords ? o.keywords(it) : '')).toLowerCase();
+        if (keys) keys.set(it, k);
+      }
+      return k;
+    }
+    function compute() {
+      var all = o.items ? o.items() : null;
+      if (!all) return null;
+      var text = input.value.trim(), q = text.toLowerCase(), toks = q ? q.split(/\s+/) : [];
+      var first = [], rest = [], max = o.max || 40, exact = false;
+      for (var i = 0; i < all.length; i++) {
+        var it = all[i], k = keyOf(it), ok = true;
+        for (var t = 0; t < toks.length; t++) if (k.indexOf(toks[t]) < 0) { ok = false; break; }
+        if (!ok) continue;
+        var lab = labelOf(it).toLowerCase();
+        if (lab === q || (o.codeOf && String(o.codeOf(it)).toLowerCase() === q)) exact = true;
+        (q && lab.indexOf(q) === 0 ? first : rest).push(it);
+      }
+      var matches = first.length + rest.length;
+      return { items: first.concat(rest).slice(0, max), text: text, exact: exact, matches: matches, total: all.length };
+    }
+    function paintActive() {
+      rows.forEach(function (r, i) { r.classList.toggle('on', i === active); });
+      if (rows[active] && rows[active].scrollIntoView) rows[active].scrollIntoView({ block: 'nearest' });
+    }
+    function render() {
+      App.clear(list); rows = [];
+      var c = compute();
+      if (!c) { shown = []; list.appendChild(h('div', { class: 'opt none', text: 'Loading…' })); return; }
+      shown = c.items.slice();
+      if (o.allowFree && c.text && !c.exact) shown.push({ __free: true, name: c.text });  // last, so Enter picks a real match first
+      if (!shown.length) { list.appendChild(h('div', { class: 'opt none', text: typeof o.none === 'function' ? o.none(c.text) : (o.none || 'Nothing found') })); return; }
+      if (active >= shown.length) active = 0;
+      var more = c.matches - c.items.length, noun = o.noun || 'matches';
+      shown.forEach(function (it, i) {
+        var row = h('div', { class: 'opt', role: 'option' });
+        if (it.__free) row.appendChild(h('span', { text: 'Use "' + it.name + '" as a new item' }));
+        else {
+          row.appendChild(h('span', { text: labelOf(it) }));
+          if (o.sub) { var s = o.sub(it); if (s) row.appendChild(h('small', { text: s })); }
+        }
+        row.addEventListener('mousedown', function (e) { e.preventDefault(); pick(it); });
+        row.addEventListener('mousemove', function () { if (active !== i) { active = i; paintActive(); } });
+        rows.push(row); list.appendChild(row);
+      });
+      if (more > 0) {
+        list.appendChild(h('div', { class: 'opt none', text: 'Showing ' + c.items.length + ' of ' + c.matches + ' ' + noun + ' - keep typing to narrow it down' }));
+      }
+      paintActive();
+    }
+    function place() {
+      var r = input.getBoundingClientRect(), vh = window.innerHeight, vw = window.innerWidth;
+      var below = vh - r.bottom - 12, above = r.top - 12, up = below < 180 && above > below;
+      var width = Math.max(r.width, 260);
+      list.style.width = width + 'px';
+      list.style.left = Math.max(8, Math.min(r.left, vw - width - 8)) + 'px';
+      list.style.maxHeight = Math.max(120, Math.min(300, up ? above : below)) + 'px';
+      if (up) { list.style.top = 'auto'; list.style.bottom = (vh - r.top + 2) + 'px'; }
+      else { list.style.bottom = 'auto'; list.style.top = (r.bottom + 2) + 'px'; }
+    }
+    function onMove() { if (isOpen) place(); }
+    function open() {
+      if (isOpen) { render(); place(); return; }
+      isOpen = true; active = 0; list.hidden = false; render(); place();
+      window.addEventListener('scroll', onMove, true); window.addEventListener('resize', onMove);
+    }
+    function close() {
+      if (!isOpen) return;
+      isOpen = false; list.hidden = true;
+      window.removeEventListener('scroll', onMove, true); window.removeEventListener('resize', onMove);
+    }
+    function pick(it) {
+      if (it.__free) { selected = null; input.value = it.name; }
+      else { selected = it; input.value = labelOf(it); }
+      close();
+      if (o.onPick) o.onPick(it.__free ? { free: true, name: it.name } : it);
+    }
+    input.addEventListener('input', function () {
+      selected = null; active = 0; open();
+      if (o.onInput) o.onInput(input.value.trim());
+    });
+    input.addEventListener('focus', function () { if (!input.disabled) { try { input.select(); } catch (e) { noop(); } open(); } });
+    input.addEventListener('blur', function () { setTimeout(close, 120); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!isOpen) open(); else { active = Math.min(active + 1, shown.length - 1); paintActive(); }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault(); active = Math.max(active - 1, 0); paintActive();
+      } else if (e.key === 'Enter') {
+        if (isOpen && shown[active]) { e.preventDefault(); pick(shown[active]); }
+      } else if (e.key === 'Escape') {
+        if (isOpen) { e.stopPropagation(); close(); }
+      } else if (e.key === 'Tab') close();
+    });
+    return {
+      el: el, input: input,
+      get: function () {
+        if (selected) return selected;
+        var t = input.value.trim();
+        return o.allowFree && t ? { free: true, name: t } : null;
+      },
+      text: function () { return input.value.trim(); },
+      set: function (it) { selected = it || null; input.value = it ? labelOf(it) : ''; },
+      setText: function (t) { selected = null; input.value = t || ''; },
+      clear: function () { selected = null; input.value = ''; },
+      focus: function () { input.focus(); },
+      disable: function (d) { input.disabled = !!d; }
+    };
+  };
+  // ---------- shared data (loaded once, refreshed only when something changes) ----------
+  App.parties = function (force) {
+    if (force || !App._parties) {
+      var p = App.api('parties').then(function (d) { App.partyList = d; App.partiesAt = Date.now(); return d; });
+      App._parties = p;
+      p.catch(function () { if (App._parties === p) App._parties = null; });
+    }
+    return App._parties;
+  };
+  App.invalidateParties = function () { App._parties = null; };
+  App.partyItems = function (type) {
+    if (!App.partyList) return null;
+    return type === 'Lead' ? App.partyList.leads : App.partyList.customers;
+  };
+  App.partyLabel = function (it) { return it.name; };
+  /** Hint for the Customer / Lead pickers when a name is not found: it may be on the other side of the Customer | Lead switch. */
+  App.partyNone = function (type) {
+    return function () {
+      return type() === 'Lead' ? 'Nothing found in open leads (a lead that already ordered is now a customer) - try the Customer button'
+                               : 'Nothing found in customers - try the Lead button';
+    };
+  };
+  App.partySub = function (it) { return [it.city, it.status && it.status !== 'Inquiry' ? it.status : ''].filter(Boolean).join(' · '); };
+  /** "Searching 7 customers" / "Searching 7 open leads" line that sits under the Customer / lead field. */
+  App.partyHintText = function (type) {
+    var l = App.partyItems(type);
+    if (!l) return 'Loading the ' + (type === 'Lead' ? 'leads' : 'customers') + '…';
+    return 'Searching ' + l.length + (type === 'Lead' ? ' open lead' : ' customer') + (l.length === 1 ? '' : 's');
+  };
+  /** The whole Products tab. force = load it again (the old list stays usable until the new one arrives). */
+  App.products = function (force) {
+    if (force || !App._products) {
+      var p = App.api('products').then(function (rows) {
+        App.productList = rows.map(function (a) {
+          return { code: String(a[0]), name: a[1], pcs: a[2], list: a[3], gst: a[4], avail: a[5], books: a[6], photo: a[7] === 1, more: a[8] || '' };
+        });
+        App.productsAt = Date.now();
+        return App.productList;
+      });
+      App._products = p;
+      p.catch(function () { if (App._products === p) App._products = null; });
+    }
+    return App._products;
+  };
+  /** Called whenever a tab opens: re-reads customers/leads (after 20 s) and Products (after 2 min), so new rows show up without reopening the app. */
+  App.refreshLookups = function () {
+    var now = Date.now();
+    if (!App._parties || now - (App.partiesAt || 0) > 20000) App.parties(true).catch(noop);
+    if (!App._products || now - (App.productsAt || 0) > 120000) App.products(true).catch(noop);
+  };
+  App.productItems = function () { return App.productList; };
+  App.productLabel = function (p) { return p.name || p.code; };
+  App.productCode = function (p) { return p.code; };
+  App.productSub = function (p) { return p.code + (p.pcs ? ' · ' + p.pcs + ' pcs/set' : ''); };
+  App.productWords = function (p) { return p.more; };
+  /** Settings every item picker shares: lists up to 100 rows, searches name + code + tally name + group + brand. */
+  App.productPicker = function (extra) {
+    var o = { items: App.productItems, label: App.productLabel, sub: App.productSub, keywords: App.productWords, codeOf: App.productCode,
+              max: 100, noun: 'items', allowFree: true };
+    Object.keys(extra || {}).forEach(function (k) { o[k] = extra[k]; });
+    return o;
+  };
+  App.findProduct = function (code) {
+    var c = String(code), l = App.productList || [];
+    for (var i = 0; i < l.length; i++) if (l[i].code === c) return l[i];
+    return null;
+  };
+  // ---------- "needs attention" counts (tab bubbles, bell) ----------
+  // Boards report what they have already loaded; App.refreshAttn() reads the same lists once at start (read-only, same calls the boards use).
+  var LEAD_CLOSED = ['Business Done', 'Business Lost', 'Converted', 'Lost'];
+  App.attn = { leads: { overdue: 0, open: 0, value: 0 }, requirements: { awaiting: 0 }, orders: { waiting: 0 } };
+  var attnFns = [];
+  App.onAttn = function (fn) { attnFns.push(fn); };
+  App.setAttn = function (key, data) {
+    App.attn[key] = data;
+    attnFns.forEach(function (fn) { try { fn(App.attn); } catch (e) { noop(); } });
+  };
+  /** Numbers for the Leads tab from a list of OPEN lead rows. */
+  App.leadStats = function (rows, shown) {
+    var today = App.today(), overdue = 0, value = 0;
+    rows.forEach(function (r) {
+      if (LEAD_CLOSED.indexOf(r.status) >= 0) return;
+      if (r.followUp && r.followUp < today) overdue++;
+      var v = Number(r.value); if (r.value !== '' && isFinite(v)) value += v;
+    });
+    return { overdue: overdue, open: shown === undefined ? rows.length : shown, value: value };
+  };
+  /** Requirements waiting for the purchase manager (status blank) in a list of rows. */
+  App.awaitingCount = function (rows) { return rows.filter(function (r) { return !r.status; }).length; };
+  App.refreshAttn = function () {
+    App.api('leads.list', { filter: 'Open', search: '' }).then(function (d) { App.setAttn('leads', App.leadStats(d.rows, d.shown)); }).catch(noop);
+    App.api('req.list', { filter: 'All', search: '' }).then(function (d) { App.setAttn('requirements', { awaiting: App.awaitingCount(d.rows) }); }).catch(noop);
+    App.api('quote.list', { search: '', view: 'Waiting' }).then(function (d) { App.setAttn('orders', { waiting: d.shown }); }).catch(noop);
+  };
+  // ---------- header: department menu, search, bell ----------
+  function wireShell() {
+    var deptBtn = App.byId('dept-btn'), deptMenu = App.byId('dept-menu');
+    var gsInput = App.byId('gs-input'), gsList = App.byId('gs-list');
+    var bell = App.byId('bell'), bellPop = App.byId('bell-pop'), pip = App.byId('bell-pip');
+    function closeAll(except) {
+      if (except !== 'dept') { deptMenu.hidden = true; deptBtn.setAttribute('aria-expanded', 'false'); }
+      if (except !== 'gs') gsList.hidden = true;
+      if (except !== 'bell') { bellPop.hidden = true; bell.setAttribute('aria-expanded', 'false'); }
+    }
+    App.closeShell = function () { closeAll(''); };
+    deptBtn.addEventListener('click', function () {
+      var open = deptMenu.hidden; closeAll(open ? 'dept' : '');
+      deptMenu.hidden = !open; deptBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    App.byId('dept-sales').addEventListener('click', function () { closeAll(''); });
+    document.addEventListener('mousedown', function (e) {
+      if (!e.target.closest) return;
+      if (!e.target.closest('.dept')) { deptMenu.hidden = true; deptBtn.setAttribute('aria-expanded', 'false'); }
+      if (!e.target.closest('#gs')) gsList.hidden = true;
+      if (!e.target.closest('.bellwrap')) { bellPop.hidden = true; bell.setAttribute('aria-expanded', 'false'); }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeAll('');
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); gsInput.focus(); }
+    });
+    var brand = App.byId('brand');
+    brand.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); brand.click(); } });
+    // search: customers and leads from the lists the app already holds; Enter searches Orders and quotations
+    function paintSearch() {
+      var q = gsInput.value.trim().toLowerCase();
+      App.clear(gsList);
+      if (!q) { gsList.hidden = true; return; }
+      var toks = q.split(/\s+/);
+      function hit(it) { var k = (it.name + ' ' + (it.city || '')).toLowerCase(); return toks.every(function (t) { return k.indexOf(t) >= 0; }); }
+      var any = false;
+      if (!App.partyList) gsList.appendChild(h('div', { class: 'gs-none', text: 'Loading customers and leads…' }));
+      else {
+        [['Customer', 'Customers', App.partyList.customers], ['Lead', 'Open leads', App.partyList.leads]].forEach(function (g) {
+          var found = (g[2] || []).filter(hit);
+          if (!found.length) return;
+          any = true;
+          gsList.appendChild(h('div', { class: 'gs-grp', text: g[1] }));
+          found.slice(0, 5).forEach(function (it) {
+            gsList.appendChild(h('div', { class: 'gs-row' },
+              h('div', null, h('b', { text: it.name }), it.city ? h('small', { class: 'mute', text: it.city }) : null),
+              h('div', { class: 'a' },
+                h('button', { type: 'button', class: 'btn sm soft', text: '+ Requirement', onclick: function () { closeAll(''); App.go('requirements', { forType: g[0], partyId: it.id }); } }),
+                h('button', { type: 'button', class: 'btn sm', text: 'Quote', onclick: function () { closeAll(''); App.go('quote', { forType: g[0], partyId: it.id }); } }))));
+          });
+          if (found.length > 5) gsList.appendChild(h('div', { class: 'gs-none', text: found.length - 5 + ' more - keep typing to narrow it down' }));
+        });
+        if (!any) gsList.appendChild(h('div', { class: 'gs-none', text: 'No customer or lead matches.' }));
+      }
+      gsList.appendChild(h('div', { class: 'gs-grp', text: 'Orders and quotations' }));
+      gsList.appendChild(h('div', { class: 'gs-row' }, h('div', null, h('b', { text: 'Search Orders for “' + gsInput.value.trim() + '”' }), h('small', { class: 'mute', text: 'Order numbers, quote numbers and customer names' })),
+        h('div', { class: 'a' }, h('button', { type: 'button', class: 'btn sm', text: 'Open', onclick: goOrders }))));
+      gsList.hidden = false;
+    }
+    function goOrders() { var t = gsInput.value.trim(); closeAll(''); gsInput.value = ''; App.go('orders', { search: t }); }
+    gsInput.addEventListener('input', paintSearch);
+    gsInput.addEventListener('focus', function () { if (gsInput.value.trim()) paintSearch(); });
+    gsInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && gsInput.value.trim()) { e.preventDefault(); goOrders(); }
+      else if (e.key === 'Escape') { e.stopPropagation(); gsInput.value = ''; gsList.hidden = true; gsInput.blur(); }
+    });
+    // bell: the same counts that appear on the tabs
+    function paintBell() {
+      var a = App.attn, items = [];
+      if (a.leads.overdue) items.push({ n: a.leads.overdue, t: a.leads.overdue === 1 ? 'follow-up overdue' : 'follow-ups overdue', s: 'Leads', go: 'leads' });
+      if (a.requirements.awaiting) items.push({ n: a.requirements.awaiting, t: a.requirements.awaiting === 1 ? 'requirement awaiting decision' : 'requirements awaiting decision', s: 'Requirements', go: 'requirements' });
+      if (a.orders.waiting) items.push({ n: a.orders.waiting, t: a.orders.waiting === 1 ? 'quotation waiting for a decision' : 'quotations waiting for a decision', s: 'Orders', go: 'orders' });
+      pip.hidden = !items.length;
+      bell.setAttribute('aria-label', items.length ? 'Things that need attention: ' + items.length : 'Nothing needs attention');
+      App.clear(bellPop).appendChild(h('div', { class: 'hd', text: 'Needs attention' }));
+      if (!items.length) bellPop.appendChild(h('div', { class: 'empty-n', text: 'Nothing is waiting for you right now.' }));
+      items.forEach(function (it) {
+        bellPop.appendChild(h('button', { type: 'button', class: 'pop-i', onclick: function () { closeAll(''); App.go(it.go); } },
+          h('span', { class: 'cnt', text: String(it.n) }), h('span', null, h('b', { text: it.t }), h('small', { class: 'mute', text: it.s }))));
+      });
+    }
+    bell.addEventListener('click', function () {
+      var open = bellPop.hidden; closeAll(open ? 'bell' : '');
+      if (open) paintBell();
+      bellPop.hidden = !open; bell.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    App.onAttn(paintBell); paintBell();
+  }
+  // ---------- boards and tabs ----------
+  App.register = function (name, label, board) { App.boards[name] = board; App.order.push({ name: name, label: label }); };
+  App.go = function (name, params) {
+    var b = App.boards[name];
+    if (!b) return;
+    App.current = name;
+    App.closeMenu();
+    if (App.closeShell) App.closeShell();
+    App.order.forEach(function (o) { App.byId('board-' + o.name).hidden = o.name !== name; });
+    Array.prototype.forEach.call(App.byId('tabs').children, function (btn) {
+      var on = btn.getAttribute('data-board') === name;
+      btn.classList.toggle('on', on);
+      if (on) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current');
+    });
+    var lab = ''; App.order.forEach(function (o) { if (o.name === name) lab = o.label; });
+    var path = App.byId('path');
+    if (path) { App.clear(path).appendChild(document.createTextNode('Sales / ')); path.appendChild(h('b', { text: lab })); }
+    b.show(params || {});
+    window.scrollTo(0, 0);
+  };
+  function fatal(msg) {
+    var splash = App.byId('splash');
+    splash.hidden = false; App.byId('boards').hidden = true;
+    App.clear(splash).appendChild(h('div', { class: 'card' },
+      h('h2', { text: 'The app could not start' }),
+      h('p', { text: msg }),
+      h('p', { class: 'mute', text: 'If it says "Access denied", ask the admin to add your Google email to the Users tab (role Admin or Sales).' }),
+      h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn primary', text: 'Try again', onclick: function () { App.start(); } }))));
+  }
+  var shellReady = false;
+  App.start = function () {
+    var splash = App.byId('splash');
+    splash.hidden = false; App.clear(splash).appendChild(document.createTextNode('Loading…'));
+    App.api('boot').then(function (b) {
+      App.boot = b;
+      App.clear(App.byId('who')).appendChild(h('span', { class: 'av', 'aria-hidden': 'true', text: App.initials(b.user.name) }));
+      App.byId('who').appendChild(h('span', { class: 'who-t' }, b.user.name, h('small', { text: b.user.role })));
+      App.byId('who').setAttribute('title', b.user.name + ' · ' + b.user.role);
+      var brand = App.byId('brand');
+      if (brand && !brand._wired) { brand._wired = true; brand.addEventListener('click', function () { App.go(App.order[0].name); }); }
+      var tabs = App.clear(App.byId('tabs')), tabN = {};
+      App.order.forEach(function (o) {
+        var n = h('span', { class: 'n', hidden: true });
+        tabN[o.name] = n;
+        tabs.appendChild(h('button', { type: 'button', 'data-board': o.name, onclick: function () { App.go(o.name); } }, App.icon(o.name), o.label, n));
+        if (!App.boards[o.name]._ready) { App.boards[o.name].init(App.byId('board-' + o.name)); App.boards[o.name]._ready = true; }
+      });
+      function paintTab(name, count, title) {
+        var n = tabN[name]; if (!n) return;
+        n.hidden = !(count > 0); n.textContent = count > 0 ? String(count) : ''; n.setAttribute('title', title);
+      }
+      function paintTabs() {
+        paintTab('leads', App.attn.leads.overdue, 'Overdue follow-ups');
+        paintTab('requirements', App.attn.requirements.awaiting, 'Awaiting decision');
+        paintTab('orders', App.attn.orders.waiting, 'Quotations waiting for a decision');
+      }
+      App.onAttn(paintTabs); paintTabs();
+      if (!shellReady) { shellReady = true; wireShell(); }
+      splash.hidden = true; App.byId('boards').hidden = false;
+      App.go(App.order[0].name);
+      App.parties().catch(noop);
+      App.products().catch(function (e) { App.toast('Could not load the item list: ' + e.message, 'err'); });
+      App.refreshAttn();
+    }).catch(function (e) { fatal(e && e.message ? e.message : String(e)); });
+  };
+})();
+</script>

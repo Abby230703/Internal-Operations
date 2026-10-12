@@ -5028,6 +5028,8 @@ REPLACE:
 ##############################################################################
 # Hospi Ops: Procurement, Warehouse, Accounts and Admin
 
+> Engineers / LLMs: read **`HANDOFF.md`** first (architecture, data model, every route, test harness, history, the open Make Quote typing bug). The test harness is in `harness/`; the owner's original Sales code is in `reference/original-sales/`.
+
 Adds four departments to the existing Sales app. Same web app, one URL per department:
 
 | URL | Who | Tabs |

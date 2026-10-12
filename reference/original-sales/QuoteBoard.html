@@ -1,0 +1,456 @@
+<script>
+/* QuoteBoard.html - the "Make Quote" tab, and App.docForm: the document form used by BOTH
+   the Make Quote tab (mode 'quote') and the New order drawer on the Orders tab (mode 'order').
+   Prices are Rs per piece, GST-exclusive.  Amount = pcs per set x sets x offer price.
+   Quantity can be typed as total pieces OR as sets (App.qty keeps the two in step).
+   Mode 'order' = direct order: the quotation is saved and converted to an order in one step.
+   Design update: numbered steps, line cards, Customer | Lead switch on the field's label row, totals dock. All calculations and server calls are unchanged. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h;
+  function numInput(extra) {
+    var a = { class: 'inp sm', type: 'number', step: 'any', min: 0, inputmode: 'decimal' };
+    Object.keys(extra || {}).forEach(function (k) { a[k] = extra[k]; });
+    return h('input', a);
+  }
+  function opts(list, blank) {
+    var out = [h('option', { value: '', text: blank })];
+    list.forEach(function (x) { out.push(h('option', { value: x, text: x })); });
+    return out;
+  }
+  /**
+   * cfg: { mode: 'quote' | 'order', onSaved(result, partyName), onClose() }
+   * Returns { el, show(params), reset() }.  onClose (optional) adds a Cancel button to the form.
+   */
+  App.docForm = function (cfg) {
+    cfg = cfg || {};
+    var Q = { root: null, el: {}, forType: 'Customer', party: null, lines: [], uid: 0, reqs: [], reqSeq: 0, typeSeg: null, mode: cfg.mode === 'order' ? 'order' : 'quote' };
+    var ORDER = Q.mode === 'order';
+    function qtyOf(l) { return l.ui && l.ui.q ? l.ui.q.get() : null; }
+    function isBlank(l) { return !l.code && !l.desc && !qtyOf(l) && l.list === '' && l.offer === ''; }
+    function stepHead(n, title, right) {
+      return h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: String(n) }), h('h2', { text: title })), right || null);
+    }
+    // ---------- page ----------
+    function build() {
+      var e = Q.el, L = App.boot.lists;
+      Q.root = h('div', { class: 'board' });
+      Q.typeSeg = App.kind({
+        options: [{ v: 'Customer', label: 'Customer' }, { v: 'Lead', label: 'Lead' }], value: Q.forType, label: ORDER ? 'This order is for a' : 'This quotation is for a',
+        onChange: function (v) { Q.forType = v; e.party.clear(); setParty(null); partyHint(); e.party.focus(); }
+      });
+      e.party = App.combo({
+        placeholder: 'Type a customer name…', items: function () { return App.partyItems(Q.forType); },
+        label: App.partyLabel, sub: App.partySub, none: App.partyNone(function () { return Q.forType; }), onPick: setParty,
+        onInput: function () { if (Q.party) setParty(null); }
+      });
+      e.partyHint = h('div', { class: 'hint' });
+      e.partyNote = h('div', { class: 'lead-note', hidden: true }, App.icon('info', 16),
+        h('span', { text: ORDER ? 'The lead is added to Customers and marked Business Done when the order is created.' : 'A lead is added to Customers when its quotation is converted to an order.' }));
+      e.valid = h('input', { class: 'inp', type: 'date', value: App.boot.defaults.validUntil });
+      e.payment = h('select', { class: 'inp' }, opts(L.paymentTerms, '- choose -'));
+      e.delivery = h('select', { class: 'inp' }, opts(L.deliveryTerms, '- choose -'));
+      e.nextNo = h('span', { class: 'badge b-blue', text: 'Next number: ' + App.boot.nextQuoteNo });
+      e.reqbox = h('div', { class: 'card reqbox', hidden: true });
+      e.lines = h('div', { class: 'lines' });
+      e.addBtn = h('button', { type: 'button', class: 'btn soft', text: '+ Add item', onclick: function () { addLine({}, true); } });
+      e.saveBtn = h('button', { type: 'button', class: 'btn primary', text: ORDER ? 'Create order' : 'Save quotation' });
+      e.saveBtn.addEventListener('click', function () { App.run(e.saveBtn, save); });
+      // totals dock (sticks to the bottom while you scroll through the items)
+      e.msg = h('div', { class: 'sp' });
+      function tot(label, cls) { var b = h('b', { text: 'Rs 0.00' }); return { el: h('div', { class: 't1' + (cls ? ' ' + cls : '') }, h('span', { text: label }), b), b: b }; }
+      e.tTax = tot('Taxable value'); e.tGst = tot('GST'); e.tAll = tot('Total', 'g');
+      e.totals = h('div', { class: 'dock', role: 'region', 'aria-label': ORDER ? 'Order total' : 'Quotation total' }, e.msg, e.tTax.el, e.tGst.el, e.tAll.el,
+        ORDER && cfg.onClose ? h('button', { type: 'button', class: 'btn', text: 'Cancel', onclick: function () { cfg.onClose(); } }) : null, e.saveBtn);
+      var partyField = h('div', { class: 'field pp span2' },
+        h('div', { class: 'pp-h' }, h('label', null, 'Customer / lead', h('span', { class: 'req', text: ' *' })), Q.typeSeg.el),
+        e.party.el, e.partyHint, e.partyNote);
+      var fields = [partyField];
+      if (!ORDER) fields.push(App.field('Valid until', e.valid));
+      fields.push(App.field('Payment terms', e.payment), App.field('Delivery terms', e.delivery));
+      if (!ORDER) {
+        Q.root.appendChild(h('div', { class: 'ph' },
+          h('div', null, h('h1', { text: 'Make quotation' }), h('p', { text: 'Rates are per piece, excluding GST. Type total pieces or sets – either one.' })),
+          h('div', { class: 'acts' }, e.nextNo)));
+      } else {
+        Q.root.appendChild(h('div', { class: 'toolbar' }, h('div', { class: 'note', style: 'flex:1;margin:0', text: 'The customer has already said yes: this skips the quotation and creates the sales order straight away. A lead is added to Customers.' }), e.nextNo));
+      }
+      Q.root.appendChild(h('div', { class: 'card' }, stepHead(1, 'Who is it for?'), h('div', { class: 'grid' }, fields)));
+      Q.root.appendChild(e.reqbox);
+      var itemsHead = stepHead(2, 'Items', h('span', { class: 'mute', style: 'font-size:13px', text: 'Type total pieces or sets - either one. Rates are per piece, excluding GST.' }));
+      e.itemsNo = itemsHead.querySelector('.step i');   // becomes 3 while the open-requirements step is showing
+      Q.root.appendChild(h('div', { class: 'card' },
+        itemsHead,
+        e.lines,
+        h('div', { style: 'margin-top:16px' }, e.addBtn)));
+      Q.root.appendChild(e.totals);
+      partyHint();
+      App.parties().then(partyHint).catch(function () { return null; });
+      resetLines();
+    }
+    function partyHint() {
+      var e = Q.el;
+      e.party.input.placeholder = Q.forType === 'Lead' ? 'Type a lead name…' : 'Type a customer name…';
+      e.partyHint.textContent = App.partyHintText(Q.forType);
+      e.partyNote.hidden = Q.forType !== 'Lead';
+    }
+    // ---------- lines ----------
+    function productFields(p) {
+      var list = p.list === '' ? '' : p.list;
+      return {
+        code: p.code, prod: p, desc: p.name || p.code, pcs: p.pcs > 0 ? p.pcs : 1, list: list, disc: 0,
+        offer: list === '' ? '' : list, gst: p.gst === '' ? '' : p.gst
+      };
+    }
+    function newLine(init) {
+      var l = { uid: ++Q.uid, code: '', desc: '', pcs: 1, sets: '', list: '', disc: 0, offer: '', gst: '', reqId: '', prod: null, photoUrl: '', photoMaster: false, photoSeq: 0, ui: {} };
+      Object.keys(init || {}).forEach(function (k) { l[k] = init[k]; });
+      return l;
+    }
+    function addLine(init, focus) {
+      var l = newLine(init), u = l.ui;
+      u.label = h('label', { text: 'Item' });
+      u.no = h('span', { class: 'no', 'aria-hidden': 'true' });
+      u.item = App.combo(App.productPicker({
+        placeholder: 'Item name or code - or type a new item',
+        onPick: function (it) {
+          forgetPhoto(l);
+          if (it.free) { l.code = ''; l.prod = null; l.desc = it.name; }
+          else { var pf = productFields(it); Object.keys(pf).forEach(function (k) { l[k] = pf[k]; }); syncUi(l); }
+          stockHint(l); paintPhoto(l); recalc();
+        },
+        onInput: function (t) { l.code = ''; l.prod = null; l.desc = t; forgetPhoto(l); stockHint(l); paintPhoto(l); }
+      }));
+      u.stock = h('div', { class: 'hint' });
+      u.photo = h('div', { class: 'photo', hidden: true });
+      u.file = h('input', { type: 'file', accept: 'image/*', hidden: true });
+      u.file.addEventListener('change', function () { uploadPhoto(l); });
+      u.pcs = numInput({ min: 1 }); u.list = numInput(); u.disc = numInput({ max: 100 });
+      u.q = App.qty({ cls: 'inp sm', perSet: function () { return App.num(l.pcs); }, onChange: function () { stockHint(l); recalc(); } });
+      u.offer = numInput(); u.gst = numInput({ max: 100 }); u.amt = h('div', { class: 'amt' });
+      u.pcs.addEventListener('input', function () { l.pcs = u.pcs.value; u.q.refresh(); stockHint(l); recalc(); });
+      u.list.addEventListener('input', function () { l.list = u.list.value; reprice(l, 'list'); });
+      u.disc.addEventListener('input', function () { l.disc = u.disc.value; reprice(l, 'disc'); });
+      u.offer.addEventListener('input', function () { l.offer = u.offer.value; reprice(l, 'offer'); });
+      u.gst.addEventListener('input', function () { l.gst = u.gst.value; recalc(); });
+      u.rm = h('button', { type: 'button', class: 'x rm', title: 'Remove this item', 'aria-label': 'Remove item', text: '×' });
+      u.rm.addEventListener('click', function () { removeLine(l); });
+      function cell(label, ctl) { return h('div', null, h('label', { text: label }), ctl); }
+      u.root = h('div', { class: 'line' },
+        h('div', { class: 'line-top' }, u.no, h('div', { class: 'item' }, u.label, u.item.el, u.stock, u.photo), u.rm),
+        h('div', { class: 'line-nums' },
+          cell('Pcs / set', u.pcs), cell('Total pcs', u.q.pcs), cell('Sets', u.q.sets), cell('List Rs/pc', u.list), cell('Disc %', u.disc),
+          cell('Offer Rs/pc', u.offer), cell('GST %', u.gst),
+          h('div', null, h('label', { text: 'Amount (excl. GST)' }), u.amt)),
+        u.file);   // u.file (hidden) is last so it never shifts the other inputs
+      Q.lines.push(l);
+      Q.el.lines.appendChild(u.root);
+      if (l.prod) u.item.set(l.prod); else if (l.desc) u.item.setText(l.desc);
+      syncUi(l);
+      if (init && init.sets !== undefined && init.sets !== '') u.q.setSets(init.sets);
+      stockHint(l); paintPhoto(l); renumber(); recalc();
+      if (focus) u.item.focus();
+      return l;
+    }
+    function syncUi(l) {
+      var u = l.ui;
+      u.pcs.value = l.pcs; u.list.value = l.list;
+      u.disc.value = l.disc === 0 ? '' : l.disc; u.offer.value = l.offer; u.gst.value = l.gst;
+      u.q.refresh();
+    }
+    function removeLine(l) {
+      var i = Q.lines.indexOf(l);
+      if (i < 0) return;
+      Q.lines.splice(i, 1);
+      if (l.ui.root.parentNode) l.ui.root.parentNode.removeChild(l.ui.root);
+      if (!Q.lines.length) addLine({}, false);
+      renumber(); recalc(); renderReqs();
+    }
+    function resetLines() {
+      Q.lines = []; App.clear(Q.el.lines);
+      addLine({}, false);
+    }
+    function renumber() { Q.lines.forEach(function (l, i) { l.ui.label.textContent = 'Item ' + (i + 1); l.ui.no.textContent = String(i + 1); }); }
+    /** Keep list price, discount % and offer price consistent with each other. */
+    function reprice(l, from) {
+      var u = l.ui, list = App.num(l.list), disc = App.num(l.disc), offer = App.num(l.offer);
+      if (list > 0) {
+        if (from === 'offer') {
+          if (offer >= 0) { var d = Math.max(0, Math.min(100, App.r2((1 - offer / list) * 100))); l.disc = d; u.disc.value = d === 0 ? '' : d; }
+        } else {
+          var o = App.r4(list * (1 - (isNaN(disc) ? 0 : disc) / 100));
+          l.offer = o; u.offer.value = o;
+        }
+      }
+      recalc();
+    }
+    function lineCalc(l) {
+      var pcs = App.num(l.pcs); if (!(pcs >= 1)) pcs = 1;
+      var qq = qtyOf(l), sets = qq ? qq.sets : 0;
+      var offer = App.num(l.offer), list = App.num(l.list), disc = App.num(l.disc);
+      if (!(offer > 0) && list > 0) offer = App.r4(list * (1 - (isNaN(disc) ? 0 : disc) / 100));
+      if (isNaN(offer)) offer = 0;
+      var gst = App.num(l.gst); if (isNaN(gst)) gst = 0;
+      var taxable = App.r2(pcs * sets * offer), gstAmt = App.r2(taxable * gst / 100);
+      return { pcs: pcs, sets: sets, offer: offer, gst: gst, taxable: taxable, gstAmt: gstAmt };
+    }
+    function recalc() {
+      var t = 0, g = 0;
+      Q.lines.forEach(function (l) {
+        var c = lineCalc(l);
+        t += c.taxable; g += c.gstAmt;
+        App.clear(l.ui.amt).appendChild(document.createTextNode('Rs ' + App.inr(c.taxable)));
+        l.ui.amt.appendChild(h('small', { text: '+ GST ' + App.inr(c.gstAmt) }));
+      });
+      t = App.r2(t); g = App.r2(g);
+      Q.el.tTax.b.textContent = 'Rs ' + App.inr(t);
+      Q.el.tGst.b.textContent = 'Rs ' + App.inr(g);
+      Q.el.tAll.b.textContent = 'Rs ' + App.inr(App.r2(t + g));
+      // tell the person what still blocks saving (the same checks the Save button makes)
+      var msg = '';
+      Q.lines.forEach(function (l, i) { if (!msg && !isBlank(l)) { var er = lineError(l); if (er) msg = 'Item ' + (i + 1) + ': ' + er + '.'; } });
+      Q.el.msg.textContent = msg;
+    }
+    function stockHint(l) {
+      var s = l.ui.stock;
+      s.classList.remove('warn');
+      if (l.prod) {
+        var avail = App.num(l.prod.avail), c = lineCalc(l), need = App.r2(c.pcs * c.sets);
+        if (!isNaN(avail)) avail = Math.max(0, avail);
+        if (isNaN(avail)) s.textContent = l.code;
+        else if (need > avail && need > 0) { s.textContent = 'Only ' + avail + ' pcs in stock (this line needs ' + need + ')'; s.classList.add('warn'); }
+        else s.textContent = l.code + ' · in stock: ' + avail + ' pcs';
+        if (l.prod.list === '' && l.offer === '') { s.textContent += ' · no list price on file - enter the rate'; s.classList.add('warn'); }
+      } else if (l.desc) {
+        s.textContent = 'New item - enter the price and GST yourself.'; s.classList.add('warn');
+      } else s.textContent = '';
+    }
+    // ---------- product pictures (quotation only: they print on the quotation PDF) ----------
+    function hasPhoto(l) { return !!(l.photoUrl || (l.prod && l.prod.photo)); }
+    /** A different item was chosen: a picture uploaded for the old one no longer belongs here. */
+    function forgetPhoto(l) { l.photoUrl = ''; l.photoMaster = false; l.photoSeq++; }
+    function paintPhoto(l) {
+      var u = l.ui;
+      if (ORDER || !u.photo) return;
+      var box = App.clear(u.photo);
+      if (!l.code && !l.desc) { box.hidden = true; return; }
+      box.hidden = false;
+      var on = hasPhoto(l);
+      box.className = 'photo ' + (on ? 'ok' : 'none');
+      box.appendChild(h('span', null, on
+        ? [h('b', { text: '✓ Picture ' }), l.photoUrl ? (l.photoMaster ? 'added and saved on the product' : 'added for this quotation') : 'from the product master']
+        : 'No picture yet - the quotation will print without one'));
+      var btn = h('button', { type: 'button', class: 'btn sm', text: on ? 'Change picture' : 'Upload picture' });
+      btn.addEventListener('click', function () { u.file.value = ''; u.file.click(); });
+      u.photoBtn = btn;
+      box.appendChild(btn);
+    }
+    function uploadPhoto(l) {
+      var u = l.ui, f = u.file.files && u.file.files[0];
+      if (!f) return;
+      var seq = ++l.photoSeq, code = l.code, prev = l.photoUrl, btn = u.photoBtn;
+      if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+      return App.readPhoto(f).then(function (pic) {
+        return App.api('photo.upload', { code: code, name: pic.name, data: pic.data, prev: prev });
+      }).then(function (r) {
+        if (seq !== l.photoSeq) {
+          if (r.master) { var p0 = App.findProduct(code); if (p0) p0.photo = true; }
+          Q.lines.forEach(paintPhoto);
+          App.toast('The item was changed while the picture uploaded - pick the picture again for the new item.', 'warn');
+          return;
+        }
+        l.photoUrl = r.url; l.photoMaster = !!r.master;
+        if (r.master && l.prod) l.prod.photo = true;    // the in-memory product list now knows it has a picture
+        Q.lines.forEach(paintPhoto);
+        App.toast(r.master ? 'Picture saved. It is now on the product master too, so future quotations pick it up.' : 'Picture added to this quotation.');
+      }).catch(function (e) {
+        paintPhoto(l);
+        App.toast(e && e.message ? e.message : String(e), 'err');
+      });
+    }
+    // ---------- open requirements of the chosen party ----------
+    function setParty(p) {
+      if (Q.party && p && Q.party.id === p.id) return;
+      var stale = Q.lines.filter(function (l) { return l.reqId; });
+      if (stale.length) {
+        stale.forEach(function (l) { removeLine(l); });
+        App.toast('Removed ' + stale.length + (stale.length === 1 ? ' item' : ' items') + ' that came from the previous requirements.', 'warn');
+      }
+      Q.party = p || null;
+      loadReqs();
+    }
+    function loadReqs() {
+      var seq = ++Q.reqSeq;
+      Q.reqs = [];
+      if (!Q.party) { renderReqs(); return Promise.resolve(); }
+      return App.api('quote.openReqs', { forType: Q.forType, partyId: Q.party.id }).then(function (rows) {
+        if (seq !== Q.reqSeq) return;
+        Q.reqs = rows; renderReqs();
+      }).catch(function (e) {
+        if (seq !== Q.reqSeq) return;
+        App.toast('Could not load the open requirements: ' + e.message, 'err');
+      });
+    }
+    function isAdded(reqId) { return Q.lines.some(function (l) { return l.reqId === reqId; }); }
+    function renderReqs() {
+      var box = App.clear(Q.el.reqbox);
+      if (!Q.party || !Q.reqs.length) { box.hidden = true; Q.el.itemsNo.textContent = '2'; return; }
+      box.hidden = false; Q.el.itemsNo.textContent = '3';
+      var left = Q.reqs.filter(function (r) { return !isAdded(r.reqId); });
+      var addAll = h('button', { type: 'button', class: 'btn sm soft', text: 'Add all' });
+      addAll.addEventListener('click', function () { App.run(addAll, function () { return addReqs(left); }); });
+      box.appendChild(h('div', { class: 'chead' },
+        h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'Open requirements for ' + Q.party.name + ' (' + left.length + ' not added yet)' })),
+        left.length ? addAll : null));
+      var grid = h('div', { class: 'reqs' });
+      Q.reqs.forEach(function (r) {
+        var added = isAdded(r.reqId), btn = h('button', { type: 'button', class: 'btn sm' + (added ? '' : ' primary'), text: added ? 'Added' : 'Add', disabled: added });
+        btn.addEventListener('click', function () { App.run(btn, function () { return addReqs([r]); }); });
+        grid.appendChild(h('div', { class: 'reqrow' + (added ? ' done' : '') },
+          h('div', null, h('b', { text: r.item }),
+            h('small', { text: qtyText(r) + (r.needBy ? ' · need by ' + App.fmtDate(r.needBy) : '') + (r.notes ? ' · ' + r.notes : '') })),
+          btn));
+      });
+      box.appendChild(grid);
+    }
+    function qtyText(r) { var q = App.qtyOf(r.sets, r.itemCode); return q.main + (q.sub ? ' (' + q.sub + ')' : ''); }
+    function addReqs(list) {
+      return App.products().then(function () {
+        list.forEach(function (r) {
+          if (isAdded(r.reqId)) return;
+          var p = r.itemCode ? App.findProduct(r.itemCode) : null, init = { reqId: r.reqId, sets: r.sets };
+          if (p) { var f = productFields(p); Object.keys(f).forEach(function (k) { init[k] = f[k]; }); }
+          else init.desc = r.itemDesc || r.item;
+          Q.lines.filter(isBlank).forEach(removeLineQuiet);
+          addLine(init, false);
+        });
+        renderReqs();
+      });
+    }
+    function removeLineQuiet(l) {
+      var i = Q.lines.indexOf(l);
+      if (i >= 0) Q.lines.splice(i, 1);
+      if (l.ui.root.parentNode) l.ui.root.parentNode.removeChild(l.ui.root);
+    }
+    // ---------- save ----------
+    function lineError(l) {
+      var c = lineCalc(l), list = App.num(l.list), disc = App.num(l.disc), offer = App.num(l.offer), gst = App.num(l.gst);
+      if (!l.code && !l.desc) return 'pick an item';
+      if (!(c.sets > 0)) return 'enter the quantity (pieces or sets)';
+      if (!(offer > 0) && !(list > 0)) return 'enter a price';
+      if (!isNaN(disc) && (disc < 0 || disc > 100)) return 'discount must be between 0 and 100';
+      if (isNaN(gst) || gst < 0 || gst > 100) return 'enter GST % (0 if none)';
+      return '';
+    }
+    function collect() {
+      if (!Q.party) { Q.el.party.focus(); throw new Error('Pick the ' + Q.forType.toLowerCase() + ' first.'); }
+      if (!ORDER) {
+        if (!Q.el.valid.value) { Q.el.valid.focus(); throw new Error('Enter the "valid until" date.'); }
+        if (Q.el.valid.value < App.today()) { Q.el.valid.focus(); throw new Error('"Valid until" cannot be in the past.'); }
+      }
+      var real = Q.lines.filter(function (l) { return !isBlank(l); });
+      if (!real.length) throw new Error('Add at least one item.');
+      Q.lines.forEach(function (l) { l.ui.root.classList.remove('bad'); });
+      var first = null;
+      real.forEach(function (l) {
+        var err = lineError(l);
+        if (err) { l.ui.root.classList.add('bad'); if (!first) first = { l: l, err: err }; }
+      });
+      if (first) {
+        first.l.ui.root.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        throw new Error('Item ' + (Q.lines.indexOf(first.l) + 1) + ': ' + first.err + '.');
+      }
+      return {
+        forType: Q.forType, partyId: Q.party.id, validUntil: ORDER ? '' : Q.el.valid.value,
+        paymentTerms: Q.el.payment.value, deliveryTerms: Q.el.delivery.value,
+        lines: real.map(function (l) {
+          var c = lineCalc(l), list = App.num(l.list), disc = App.num(l.disc), offer = App.num(l.offer);
+          return {
+            itemCode: l.code, desc: l.desc, pcs: c.pcs, sets: c.sets, list: list >= 0 ? list : '', disc: isNaN(disc) ? 0 : disc,
+            offer: offer > 0 ? offer : '', gst: c.gst, reqId: l.reqId, photo: ORDER ? '' : l.photoUrl
+          };
+        })
+      };
+    }
+    function save() {
+      var payload = collect(), party = Q.party.name;
+      return App.api(ORDER ? 'quote.createOrder' : 'quote.create', payload).then(function (r) {
+        App.invalidateParties();
+        reset();
+        refreshNo();
+        showDone(r, party);
+        if (cfg.onSaved) cfg.onSaved(r, party);
+      });
+    }
+    /** Empty the form after a save (or on demand). */
+    function reset() {
+      Q.party = null; Q.reqs = []; ++Q.reqSeq;
+      if (Q.el.party) { Q.el.party.clear(); renderReqs(); resetLines(); }
+      if (Q.el.valid) { Q.el.valid.value = App.boot.defaults.validUntil; Q.el.payment.value = ''; Q.el.delivery.value = ''; }
+    }
+    function refreshNo() {
+      return App.api('quote.nextNo').then(function (d) { Q.el.nextNo.textContent = 'Next number: ' + d.no; }).catch(function () { return null; });
+    }
+    function showDone(r, party) {
+      var pdfBox = h('div'), what = ORDER ? 'order' : 'quotation';
+      function showLink(url) {
+        App.clear(pdfBox).appendChild(h('a', { class: 'btn primary', href: url, target: '_blank', rel: 'noopener', text: 'Open PDF' }));
+      }
+      function showRetry(msg) {
+        var retry = h('button', { type: 'button', class: 'btn', text: 'Try PDF again' });
+        retry.addEventListener('click', function () {
+          App.run(retry, function () {
+            var call = ORDER ? App.api('orders.pdf', { orderId: r.quoteId }) : App.api('quote.pdf', { quoteId: r.quoteId });
+            return call.then(function (d) { showLink(d.url); });
+          });
+        });
+        App.clear(pdfBox).appendChild(h('div', null,
+          h('div', { class: 'note', text: 'The ' + what + ' is saved, but its PDF could not be made: ' + msg }), retry));
+      }
+      if (r.pdfUrl) showLink(r.pdfUrl); else showRetry(r.pdfError || 'unknown error');
+      App.modal({
+        title: ORDER ? 'Order created' : 'Quotation saved',
+        body: h('div', null,
+          h('dl', { class: 'kv' },
+            h('dt', { text: ORDER ? 'Order no.' : 'Number' }), h('dd', null, h('b', { text: ORDER ? (r.orderNo || r.quoteNo) : r.quoteNo })),
+            h('dt', { text: 'For' }), h('dd', { text: party }),
+            h('dt', { text: 'Taxable' }), h('dd', { text: 'Rs ' + App.inr(r.taxable) }),
+            h('dt', { text: 'GST' }), h('dd', { text: 'Rs ' + App.inr(r.gst) }),
+            h('dt', { text: 'Total' }), h('dd', null, h('b', { text: 'Rs ' + App.inr(r.total) }))),
+          ORDER && r.customerCreated ? h('div', { class: 'note', text: party + ' was added to Customers and the lead is marked Business Done.' }) : null,
+          (r.warnings || []).map(function (w) { return h('div', { class: 'note', text: w }); }),
+          r.pdfUrl && r.pdfNote ? h('div', { class: 'note', text: r.pdfNote }) : null,
+          pdfBox),
+        buttons: ORDER
+          ? [{ label: 'Close', kind: 'primary' }]
+          : [{ label: 'Make another' }, { label: 'Go to Orders', kind: 'primary', onclick: function (api) { api.close(); App.go('orders'); } }]
+      });
+    }
+    /** params: { forType, partyId } - arrive here from the Leads, Requirements board (or the Orders tab opening the form) */
+    function show(p) {
+      App.refreshLookups();
+      refreshNo();
+      if (p && p.partyId) {
+        Q.forType = p.forType === 'Lead' ? 'Lead' : 'Customer';
+        Q.typeSeg.set(Q.forType); partyHint();
+        App.parties().then(function () {
+          var list = App.partyItems(Q.forType) || [], hit = null;
+          list.forEach(function (x) { if (x.id === p.partyId) hit = x; });
+          if (!hit) { App.toast('That ' + Q.forType.toLowerCase() + ' is not in the list any more.', 'warn'); return; }
+          Q.el.party.set(hit); setParty(hit); partyHint();
+        }).catch(function (e) { App.toast(e.message, 'err'); });
+      } else if (Q.party) {
+        loadReqs();
+      }
+    }
+    build();
+    return { el: Q.root, show: show, reset: reset, focus: function () { Q.el.party.focus(); } };
+  };   // end App.docForm
+  // ---------- the Make Quote tab ----------
+  var form = null;
+  App.register('quote', 'Make Quote', {
+    init: function (root) { form = App.docForm({ mode: 'quote' }); root.appendChild(form.el); },
+    show: function (p) { form.show(p); }
+  });
+})();
+</script>

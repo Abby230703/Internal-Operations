@@ -1,0 +1,226 @@
+<script>
+/* RequirementsBoard.html - reorder demands for a customer or a lead (quantities are in SETS).
+   Design update: quick-add row, Customer | Lead switch on the field's label row, list grouped by status with sorting.
+   Server calls (req.list, req.create) and the save logic are unchanged. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h;
+  var B = { root: null, f: {}, forType: 'Customer', filter: 'All', search: '', seq: 0, listBox: null, countBox: null, timer: null, typeSeg: null,
+            rows: [], shown: 0, sortKey: 'status', sortDir: 'asc', sortSel: null };
+  var RANK = { '': 0, 'Accepted': 1, 'Ordered': 2, 'Denied': 3 };
+  var GROUP_NOTE = { '': 'Needs the purchase manager', 'Accepted': 'Accepted by the purchase manager', 'Ordered': 'Purchase order raised', 'Denied': 'Declined by the purchase manager' };
+  var SORTS = [
+    ['status|asc', 'Status · awaiting decision first'], ['need|asc', 'Need by · soonest first'], ['date|desc', 'Date · newest first'], ['date|asc', 'Date · oldest first'],
+    ['party|asc', 'Customer / lead · A to Z'], ['item|asc', 'Item · A to Z'], ['qty|desc', 'Qty · high to low']
+  ];
+  function init(root) {
+    B.root = root;
+    var f = B.f;
+    B.typeSeg = App.kind({
+      options: [{ v: 'Customer', label: 'Customer' }, { v: 'Lead', label: 'Lead' }], value: B.forType, label: 'This requirement is for a',
+      onChange: function (v) { B.forType = v; partyChanged(); f.party.clear(); f.party.focus(); }
+    });
+    f.party = App.combo({ placeholder: 'Type a customer name…', items: function () { return App.partyItems(B.forType); }, label: App.partyLabel, sub: App.partySub, none: App.partyNone(function () { return B.forType; }) });
+    f.partyHint = h('div', { class: 'hint' });
+    f.item = App.combo(App.productPicker({
+      placeholder: 'Search item name or code - or type a new item', onPick: itemChanged, onInput: function () { itemChanged(null); }
+    }));
+    f.info = h('div', { class: 'hint' });
+    f.q = App.qty({ perSet: function () { return f._pcs; } });
+    f.qHint = h('div', { class: 'hint', text: 'Type pieces or sets - either one. A set is the standard packing.' });
+    f.needBy = h('input', { class: 'inp', type: 'date' });
+    f.notes = h('textarea', { class: 'inp', rows: 1, maxlength: 300, placeholder: 'Optional' });
+    var saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Save requirement' });
+    saveBtn.addEventListener('click', function () { App.run(saveBtn, save); });
+    // Enter in a plain box saves (the two type-ahead boxes use Enter to pick, so they are left alone)
+    [f.q.pcs, f.q.sets, f.needBy].forEach(function (el) { el.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); } }); });
+    var form = h('div', { class: 'card', style: 'padding:20px 24px 22px' },
+      h('div', { class: 'chead', style: 'margin-bottom:14px' }, h('h2', { text: 'Quick add' }), h('span', { class: 'mute', style: 'font-size:13px', text: 'Saving keeps the customer, ready for the next item' })),
+      h('div', { class: 'quick' },
+        h('div', { class: 'field pp' },
+          h('div', { class: 'pp-h' }, h('label', null, 'Customer / lead', h('span', { class: 'req', text: ' *' })), B.typeSeg.el),
+          f.party.el, f.partyHint),
+        App.field('Item', f.item.el, { required: true, hint: f.info }),
+        App.field('Pieces', f.q.pcs, { required: true }),
+        App.field('or Sets', f.q.sets),
+        App.field('Need by', f.needBy),
+        App.field('Notes', f.notes),
+        saveBtn),
+      h('div', { style: 'margin-top:6px' }, f.qHint));
+    var chips = App.seg({
+      cls: 'chips-s', label: 'Filter requirements',
+      options: [{ v: 'All', label: 'All' }, { v: 'Accepted', label: 'Accepted' }, { v: 'Denied', label: 'Denied' }, { v: 'Ordered', label: 'Ordered' },
+                { v: 'Not quoted yet', label: 'Not quoted yet' }],
+      value: B.filter, onChange: function (v) { B.filter = v; load(); }
+    });
+    var search = h('input', { class: 'inp', type: 'search', placeholder: 'Search party, item, notes…', 'aria-label': 'Search requirements' });
+    search.addEventListener('input', function () {
+      clearTimeout(B.timer);
+      B.timer = setTimeout(function () { B.search = search.value; load(); }, 300);
+    });
+    B.sortSel = h('select', { class: 'inp', id: 'req-sort', style: 'width:215px' }, SORTS.map(function (s) { return h('option', { value: s[0], text: s[1] }); }).concat([h('option', { value: '', text: 'Custom order (from a column)' })]));
+    B.sortSel.addEventListener('change', function () {
+      if (!B.sortSel.value) return;
+      var p = B.sortSel.value.split('|'); B.sortKey = p[0]; B.sortDir = p[1]; renderList();
+    });
+    B.listBox = h('div'); B.countBox = h('div', { class: 'count' });
+    root.appendChild(h('div', { class: 'ph' },
+      h('div', null, h('h1', { text: 'Requirements' }), h('p', { text: 'Reorder demands from customers and leads. Accepting or denying is the purchase manager’s call.' }))));
+    root.appendChild(form);
+    root.appendChild(h('div', null,
+      h('div', { class: 'toolbar' }, h('h2', { text: 'All requirements' }), chips.el,
+        h('div', { class: 'sx grow' }, App.icon('search'), search),
+        h('div', { class: 'sortsel' }, h('label', { 'for': 'req-sort', text: 'Sort by' }), B.sortSel),
+        h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })),
+      h('div', { class: 'hint', text: 'Status: Accepted or Denied is set by the purchase manager. Ordered appears when a purchase order is raised.' }),
+      B.countBox, B.listBox));
+    partyChanged();
+    App.parties().then(partyChanged).catch(function () { return null; });
+  }
+  function partyChanged() {
+    var f = B.f;
+    f.party.input.placeholder = B.forType === 'Lead' ? 'Type a lead name…' : 'Type a customer name…';
+    f.partyHint.textContent = App.partyHintText(B.forType);
+  }
+  function itemChanged(it) {
+    var f = B.f;
+    if (it && !it.free) {
+      var bits = [];
+      if (it.pcs) bits.push(it.pcs + ' pcs per set');
+      if (it.avail !== '' && it.avail !== undefined) bits.push('in stock: ' + Math.max(0, Number(it.avail)) + ' pcs');
+      if (it.books !== '' && it.books !== undefined && it.books !== it.avail) bits.push('on books: ' + it.books);
+      f.info.textContent = bits.join(' · '); f.info.classList.remove('warn');
+      f._pcs = Number(it.pcs) > 0 ? Number(it.pcs) : 0;
+    } else {
+      var t = f.item.text();
+      f.info.textContent = t ? 'Not in the item list - saved as a new item.' : '';
+      f.info.classList.toggle('warn', !!t);
+      f._pcs = 0;
+    }
+    f.q.refresh();
+  }
+  function save() {
+    var f = B.f, party = f.party.get(), item = f.item.get(), qty = f.q.get();
+    if (!party || party.free) { f.party.focus(); throw new Error('Pick the ' + B.forType.toLowerCase() + ' from the list.'); }
+    if (!item) { f.item.focus(); throw new Error('Pick an item, or type the name of a new item.'); }
+    if (!qty) { f.q.pcs.focus(); throw new Error('Enter the quantity - pieces or sets.'); }
+    var payload = {
+      forType: B.forType, partyId: party.id, sets: qty.sets, needBy: f.needBy.value, notes: f.notes.value,
+      itemCode: item.free ? '' : item.code, itemDesc: item.free ? item.name : ''
+    };
+    return App.api('req.create', payload).then(function () {
+      App.toast('Requirement saved for ' + party.name, 'ok');
+      f.item.clear(); f.q.clear(); f.notes.value = ''; f.info.textContent = ''; f._pcs = 0;
+      f.item.focus();
+      return load();
+    });
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    // the item list gives pieces-per-set, so rows can show pieces; if it cannot load, rows fall back to sets
+    return Promise.all([App.api('req.list', { filter: B.filter, search: B.search }), App.products().catch(function () { return null; })]).then(function (res) {
+      var d = res[0];
+      if (seq !== B.seq) return;
+      if (B.filter === 'All' && !B.search) App.setAttn('requirements', { awaiting: App.awaitingCount(d.rows) });
+      B.rows = d.rows; B.shown = d.shown;
+      renderList();
+    }).catch(function (e) {
+      if (seq !== B.seq) return;
+      B.countBox.textContent = '';
+      App.clear(B.listBox).appendChild(h('div', { class: 'note err', text: 'Could not load requirements: ' + e.message }));
+    });
+  }
+  /** Accepted / Denied / Ordered. Blank = the purchase manager has not decided yet. */
+  function statusCell(r) {
+    if (!r.status) return App.badge('Awaiting decision', 'amber');
+    return App.badge(r.status, r.status === 'Denied' ? 'red' : (r.status === 'Accepted' ? 'green' : 'blue'));
+  }
+  // ---------- sorting and grouping (done here, on the rows already loaded) ----------
+  function pieces(r) { var p = r.itemCode ? App.findProduct(r.itemCode) : null, per = p && p.pcs >= 1 ? p.pcs : 1; return (Number(r.sets) || 0) * per; }
+  function textCmp(a, b) { a = String(a || ''); b = String(b || ''); if (!a && b) return 1; if (a && !b) return -1; return a.toLowerCase().localeCompare(b.toLowerCase()); }
+  function needCmp(a, b) { if (!a.needBy && b.needBy) return 1; if (a.needBy && !b.needBy) return -1; return a.needBy < b.needBy ? -1 : a.needBy > b.needBy ? 1 : 0; }
+  function sorted(rows) {
+    var k = B.sortKey, d = B.sortDir === 'asc' ? 1 : -1;
+    return rows.slice().sort(function (a, b) {
+      var c = 0;
+      if (k === 'status') c = ((RANK[a.status] === undefined ? 9 : RANK[a.status]) - (RANK[b.status] === undefined ? 9 : RANK[b.status])) * d || needCmp(a, b);
+      else if (k === 'need') { c = needCmp(a, b); if (c && a.needBy && b.needBy) c *= d; }
+      else if (k === 'date') c = (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) * d;
+      else if (k === 'party') c = textCmp(a.party, b.party) * (a.party && b.party ? d : 1);
+      else if (k === 'item') c = textCmp(a.item, b.item) * d;
+      else if (k === 'qty') c = (pieces(a) - pieces(b)) * d;
+      return c;
+    });
+  }
+  function sortHead(label, key, firstDir, cls) {
+    var on = B.sortKey === key;
+    var btn = h('button', { type: 'button', class: 'sortb' + (on ? ' on' : '') }, label, ' ', h('span', { 'aria-hidden': 'true', text: on ? (B.sortDir === 'asc' ? '↑' : '↓') : '↕' }));
+    btn.addEventListener('click', function () {
+      if (B.sortKey === key) B.sortDir = B.sortDir === 'asc' ? 'desc' : 'asc'; else { B.sortKey = key; B.sortDir = firstDir; }
+      var v = B.sortKey + '|' + B.sortDir, has = SORTS.some(function (s) { return s[0] === v; });
+      B.sortSel.value = has ? v : ''; renderList();
+    });
+    return h('th', { class: cls || '', 'aria-sort': on ? (B.sortDir === 'asc' ? 'ascending' : 'descending') : 'none' }, btn);
+  }
+  function rowEl(r) {
+    var q = App.qtyOf(r.sets, r.itemCode), today = App.today();
+    var late = r.needBy && r.needBy < today && (r.status === '' || r.status === 'Accepted');
+    var act = '';
+    // sales can only turn an item into a quote; accepting / denying is the purchase manager's call
+    if (r.status !== 'Denied' && !r.quoteNo && !r.soId && r.partyId) {
+      act = h('button', { type: 'button', class: 'btn sm soft', text: 'Make quote', onclick: function () { App.go('quote', { forType: r.forType, partyId: r.partyId }); } });
+    }
+    return h('tr', null,
+      h('td', { 'data-l': 'Date', text: App.fmtDate(r.date) }),
+      h('td', { 'data-l': 'Customer / lead' }, r.party ? [h('b', { text: r.party }), h('span', { class: 'sub', text: r.forType })] : h('span', { class: 'dash', text: '–' })),
+      h('td', { 'data-l': 'Item' }, r.item, r.itemCode && r.itemDesc ? h('span', { class: 'sub', text: r.itemCode }) : null),
+      h('td', { class: 'num', 'data-l': 'Qty' }, q.main, q.sub ? h('span', { class: 'sub', text: q.sub }) : null),
+      h('td', { 'data-l': 'Need by' }, r.needBy ? [App.fmtDate(r.needBy), late ? h('span', { class: 'sub late', text: 'Overdue' }) : null] : h('span', { class: 'dash', text: '–' })),
+      h('td', { 'data-l': 'Status' }, statusCell(r), r.quoteNo ? h('span', { class: 'sub', text: 'Quote ' + r.quoteNo }) : null, r.poNo ? h('span', { class: 'sub', text: 'PO ' + r.poNo }) : null),
+      h('td', { 'data-l': 'Notes' }, r.notes ? h('div', { class: 'clip', title: r.notes, text: r.notes }) : h('span', { class: 'dash', text: '–' })),
+      h('td', { class: 'acts' }, act));
+  }
+  function renderList() {
+    var rows = B.rows, d = { shown: B.shown };
+    B.countBox.textContent = (d.shown > rows.length
+      ? 'Showing the newest ' + rows.length + ' of ' + d.shown + ' - use search to narrow down.'
+      : d.shown + (d.shown === 1 ? ' requirement' : ' requirements')) + (B.sortKey === 'status' ? ' · grouped by status, soonest need-by first' : '');
+    App.clear(B.listBox);
+    if (!rows.length) { B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: 'No requirements found.' }))); return; }
+    var head = h('tr', null,
+      sortHead('Date', 'date', 'desc'), sortHead('Customer / lead', 'party', 'asc'), sortHead('Item', 'item', 'asc'), sortHead('Qty', 'qty', 'desc', 'num'),
+      sortHead('Need by', 'need', 'asc'), sortHead('Status', 'status', 'asc'), h('th', { text: 'Notes' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+    var body = h('tbody');
+    var list = sorted(rows);
+    if (B.sortKey === 'status') {
+      var groups = {}, order = [];
+      list.forEach(function (r) { var s = r.status || ''; if (!groups[s]) { groups[s] = []; order.push(s); } groups[s].push(r); });
+      order.forEach(function (s) {
+        var g = groups[s], overdue = g.filter(function (r) { return r.needBy && r.needBy < App.today(); }).length;
+        body.appendChild(h('tr', { class: 'grp' }, h('td', { colspan: '8' }, h('div', { class: 'gh' },
+          statusCell({ status: s }), h('span', { class: 'gc', text: String(g.length) }),
+          h('span', { class: 'm', text: (GROUP_NOTE[s] || '') + (s === '' && overdue ? ' · ' + overdue + ' overdue' : '') })))));
+        g.forEach(function (r) { body.appendChild(rowEl(r)); });
+      });
+    } else list.forEach(function (r) { body.appendChild(rowEl(r)); });
+    B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), body)));
+  }
+  /** params: { forType, partyId } - arrive here from the Leads board */
+  function show(p) {
+    App.refreshLookups();
+    load();
+    if (p && p.partyId) {
+      B.forType = p.forType === 'Lead' ? 'Lead' : 'Customer';
+      B.typeSeg.set(B.forType); partyChanged();
+      App.parties().then(function () {
+        var list = App.partyItems(B.forType) || [], hit = null;
+        list.forEach(function (x) { if (x.id === p.partyId) hit = x; });
+        if (hit) { B.f.party.set(hit); B.f.item.focus(); }
+        partyChanged();
+      }).catch(function (e) { App.toast(e.message, 'err'); });
+    }
+  }
+  App.register('requirements', 'Requirements', { init: init, show: show });
+})();
+</script>

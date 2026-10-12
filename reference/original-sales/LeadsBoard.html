@@ -1,0 +1,302 @@
+<script>
+/* LeadsBoard.html - enter fresh leads, follow them up.
+   Design update: page header, key numbers, New lead in a drawer, List / Board (kanban) switch. Server calls and save logic are unchanged. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h;
+  var B = { root: null, f: {}, filter: 'Open', search: '', seq: 0, listBox: null, countBox: null, timer: null, closed: ['Business Done', 'Business Lost', 'Converted', 'Lost'],
+            view: 'List', data: null, owner: '', overdueOnly: false, drawer: null, viewBtns: {}, statsBox: null, chips: null, chipsWrap: null, boardTools: null, titleEl: null };
+  function opts(list, blank) {
+    var out = blank ? [h('option', { value: '', text: blank })] : [];
+    list.forEach(function (x) { out.push(h('option', { value: x, text: x })); });
+    return out;
+  }
+  function init(root) {
+    B.root = root;
+    var L = App.boot.lists, f = B.f;
+    f.company = h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'e.g. Hotel Sunrise' });
+    f.contact = h('input', { class: 'inp', type: 'text', maxlength: 80, placeholder: 'Contact person' });
+    f.phone = h('input', { class: 'inp', type: 'tel', maxlength: 20, placeholder: 'Phone / WhatsApp' });
+    f.city = h('input', { class: 'inp', type: 'text', maxlength: 60 });
+    f.products = h('textarea', { class: 'inp', rows: 3, maxlength: 300, placeholder: 'What are they looking for?' });
+    f.products.style.height = '88px';
+    f.source = h('select', { class: 'inp' }, opts(L.leadSources, '- choose -'));
+    f.owner = h('select', { class: 'inp' }, opts(L.leadPocs, '- choose -'));
+    f.value = h('input', { class: 'inp', type: 'number', min: 0, step: 'any', placeholder: 'Rs, optional' });
+    f.follow = h('input', { class: 'inp', type: 'date' });
+    f.follow.min = App.today();
+    var saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Save lead' });
+    saveBtn.addEventListener('click', function () { App.run(saveBtn, function () { return save(false); }); });
+    var clearBtn = h('button', { type: 'button', class: 'btn', text: 'Clear', onclick: reset });
+    // the same form fields, now inside a drawer
+    var form = h('div', null,
+      App.field('Company / brand', f.company, { required: true }),
+      h('div', { class: 'grid' },
+        App.field('Contact person', f.contact),
+        App.field('Phone', f.phone),
+        App.field('City', f.city),
+        App.field('Source', f.source)),
+      App.field('Interested products', f.products),
+      h('div', { class: 'grid' },
+        App.field('Owner', f.owner),
+        App.field('Expected value', f.value),
+        App.field('Next follow-up', f.follow)));
+    B.drawer = App.drawer({
+      title: 'New lead', sub: 'Only the company name is required.', body: form, footer: [saveBtn, clearBtn],
+      onopen: function () { setTimeout(function () { f.company.focus(); }, 30); }
+    });
+    // page header
+    var newBtn = h('button', { type: 'button', class: 'btn primary' }, App.icon('plus', 16), 'New lead');
+    newBtn.addEventListener('click', function () { B.drawer.open(); });
+    var vt = h('div', { class: 'vt', role: 'group', 'aria-label': 'View' });
+    [['List', 'list'], ['Board', 'board']].forEach(function (v) {
+      var b = h('button', { type: 'button', class: 'vt-b', 'aria-pressed': 'false' }, App.icon(v[1], 16), v[0]);
+      b.addEventListener('click', function () { setView(v[0]); });
+      B.viewBtns[v[0]] = b; vt.appendChild(b);
+    });
+    B.statsBox = h('div', { class: 'stats' });
+    // list toolbar
+    B.chips = App.seg({
+      cls: 'chips-s', label: 'Filter leads',
+      options: [{ v: 'Open', label: 'Open' }, { v: 'All', label: 'All' }, { v: 'Business Done', label: 'Business done' }, { v: 'Business Lost', label: 'Business lost' }],
+      value: B.filter, onChange: function (v) { B.filter = v; load(); }
+    });
+    var search = h('input', { class: 'inp', type: 'search', placeholder: 'Search company, contact, phone, city…', 'aria-label': 'Search leads' });
+    search.addEventListener('input', function () {
+      clearTimeout(B.timer);
+      B.timer = setTimeout(function () { B.search = search.value; load(); }, 300);
+    });
+    var ownerSel = h('select', { class: 'inp', 'aria-label': 'Owner', style: 'width:190px' }, opts(L.leadPocs, 'All owners'));
+    ownerSel.addEventListener('change', function () { B.owner = ownerSel.value; renderBody(); });
+    var overdueBtn = h('button', { type: 'button', class: 'seg-b', text: 'Overdue only', 'aria-pressed': 'false' });
+    var overdueWrap = h('div', { class: 'seg chips-s' }, overdueBtn);
+    overdueBtn.addEventListener('click', function () {
+      B.overdueOnly = !B.overdueOnly; overdueBtn.classList.toggle('on', B.overdueOnly); overdueBtn.setAttribute('aria-pressed', B.overdueOnly ? 'true' : 'false'); renderBody();
+    });
+    B.boardTools = h('div', { class: 'toolbar', style: 'gap:12px' }, ownerSel, overdueWrap);
+    B.chipsWrap = B.chips.el;
+    B.titleEl = h('h2', { text: 'All leads' });
+    B.listBox = h('div'); B.countBox = h('div', { class: 'count' });
+    root.appendChild(h('div', { class: 'ph' },
+      h('div', null, h('h1', { text: 'Leads' }), h('p', { text: 'Capture new enquiries and keep every follow-up on schedule.' })),
+      h('div', { class: 'acts' }, vt, newBtn)));
+    root.appendChild(B.statsBox);
+    root.appendChild(h('div', null,
+      h('div', { class: 'toolbar' }, B.titleEl, B.chipsWrap, B.boardTools,
+        h('div', { class: 'sx grow' }, App.icon('search'), search),
+        h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })),
+      B.countBox, B.listBox));
+    reset();
+    App.onAttn(paintStats);
+    paintStats();
+    setView('List', true);
+  }
+  function setView(v, noLoad) {
+    B.view = v;
+    Object.keys(B.viewBtns).forEach(function (k) { B.viewBtns[k].classList.toggle('on', k === v); B.viewBtns[k].setAttribute('aria-pressed', k === v ? 'true' : 'false'); });
+    B.chipsWrap.hidden = v === 'Board'; B.boardTools.hidden = v !== 'Board';
+    B.titleEl.textContent = v === 'Board' ? 'Leads by stage' : 'All leads';
+    if (!noLoad) load();
+  }
+  function reset() {
+    var f = B.f;
+    ['company', 'contact', 'phone', 'city', 'products', 'value'].forEach(function (k) { f[k].value = ''; });
+    f.source.value = ''; f.owner.value = App.boot.pocDefault || '';
+    f.follow.value = App.boot.defaults.followUp;
+  }
+  function save(force) {
+    var f = B.f, company = f.company.value.trim();
+    if (!company) { f.company.focus(); throw new Error('Enter the company / brand name.'); }
+    if (f.follow.value && f.follow.value < App.today()) { f.follow.focus(); throw new Error('Follow-up date cannot be in the past.'); }
+    var payload = {
+      company: company, contact: f.contact.value, phone: f.phone.value, city: f.city.value, products: f.products.value,
+      source: f.source.value, owner: f.owner.value, value: f.value.value, followUp: f.follow.value, force: !!force
+    };
+    return App.api('leads.create', payload).then(function (r) {
+      if (r && r.needsConfirm) {
+        return App.confirm({ title: 'Possible duplicate', message: r.message, ok: 'Save anyway' }).then(function (yes) {
+          if (yes) return save(true);
+        });
+      }
+      App.toast('Lead saved: ' + company, 'ok');
+      App.invalidateParties(); reset(); B.drawer.close();
+      return load();
+    });
+  }
+  function isClosed(s) { return B.closed.indexOf(s) >= 0; }
+  function paintStats() {
+    if (!B.statsBox) return;
+    var a = App.attn.leads || { open: 0, overdue: 0, value: 0 };
+    function stat(cls, icon, label, val) { return h('div', { class: 'stat ' + cls }, h('i', null, icon), h('div', null, h('span', { text: label }), h('b', { text: val }))); }
+    App.clear(B.statsBox);
+    B.statsBox.appendChild(stat('', App.icon('leads', 22), 'Open leads', String(a.open)));
+    B.statsBox.appendChild(stat('c', App.icon('clock', 22), 'Follow-ups overdue', String(a.overdue)));
+    B.statsBox.appendChild(stat('g', 'Rs', 'Expected value', 'Rs ' + App.inr(a.value, 0)));
+  }
+  function load() {
+    var seq = ++B.seq, board = B.view === 'Board', filter = board ? 'Open' : B.filter;
+    B.countBox.textContent = 'Loading…';
+    return App.api('leads.list', { filter: filter, search: B.search }).then(function (d) {
+      if (seq !== B.seq) return;
+      if (filter === 'Open' && !B.search) App.setAttn('leads', App.leadStats(d.rows, d.shown));
+      B.data = d;
+      B.countBox.textContent = d.shown > d.rows.length
+        ? 'Showing the newest ' + d.rows.length + ' of ' + d.shown + ' leads - use search to narrow down.'
+        : d.shown + (d.shown === 1 ? ' lead' : ' leads') + (filter === 'Open' ? ' open' : '');
+      renderBody();
+    }).catch(function (e) {
+      if (seq !== B.seq) return;
+      B.countBox.textContent = '';
+      App.clear(B.listBox).appendChild(h('div', { class: 'note err', text: 'Could not load leads: ' + e.message }));
+    });
+  }
+  function renderBody() {
+    if (!B.data) return;
+    if (B.view === 'Board') App.clear(B.listBox).appendChild(board(B.data.rows));
+    else App.clear(B.listBox).appendChild(table(B.data.rows));
+  }
+  function statusSelect(row) {
+    var list = App.boot.lists.leadStatuses.slice();
+    if (list.indexOf(row.status) < 0) list.unshift(row.status);
+    var sel = h('select', { class: 'inp sm', 'aria-label': 'Status' }, opts(list));
+    sel.value = row.status;
+    sel.addEventListener('change', function () {
+      var prev = row.status, next = sel.value;
+      sel.disabled = true;
+      App.api('leads.update', { id: row.id, status: next }).then(function () {
+        row.status = next; App.invalidateParties(); App.toast('Status updated', 'ok');
+        if (isClosed(next) && B.filter === 'Open') load();
+      }).catch(function (e) { sel.value = prev; App.toast(e.message, 'err'); })
+        .then(function () { sel.disabled = false; });
+    });
+    return sel;
+  }
+  function followInput(row) {
+    var inp = h('input', { class: 'inp sm', type: 'date', value: row.followUp || '', 'aria-label': 'Follow-up date' });
+    inp.addEventListener('change', function () {
+      var prev = row.followUp || '', next = inp.value;
+      inp.disabled = true;
+      App.api('leads.update', { id: row.id, followUp: next }).then(function () {
+        row.followUp = next; App.toast('Follow-up updated', 'ok');
+      }).catch(function (e) { inp.value = prev; App.toast(e.message, 'err'); })
+        .then(function () { inp.disabled = false; });
+    });
+    return inp;
+  }
+  function table(rows) {
+    var cols = [
+      { h: 'Lead', f: function (r) {
+          return h('div', { class: 'who2' }, h('i', { text: App.initials(r.company) }),
+            h('div', null, h('b', { text: r.company }), h('span', { class: 'sub', text: [r.contact, r.city, r.date ? 'added ' + App.fmtDate(r.date) : ''].filter(Boolean).join(' · ') })));
+        } },
+      { h: 'Phone', f: function (r) { return r.phone ? h('a', { href: 'tel:' + r.phone.replace(/[^0-9+]/g, ''), text: r.phone }) : ''; } },
+      { h: 'Interested in', f: function (r) { return h('div', { class: 'clip', title: r.products, text: r.products }); } },
+      { h: 'Source / owner', f: function (r) { return [r.source || '-', h('span', { class: 'sub', text: r.owner })]; } },
+      { h: 'Status', f: statusSelect },
+      { h: 'Follow-up', f: function (r) {
+          var late = r.followUp && r.followUp < App.today() && !isClosed(r.status);
+          return [followInput(r), late ? h('span', { class: 'sub late', text: 'Overdue by ' + lateDays(r.followUp) }) : null];
+        } },
+      { h: 'Value', cls: 'num', f: function (r) { return r.value === '' ? '' : App.inr(r.value, 0); } },
+      { h: '', cls: 'acts', f: function (r) {
+          if (isClosed(r.status)) return '';
+          return [
+            h('button', { type: 'button', class: 'btn sm soft', text: '+ Requirement', onclick: function () { App.go('requirements', { forType: 'Lead', partyId: r.id }); } }),
+            ' ',
+            h('button', { type: 'button', class: 'btn sm', text: 'Quote', onclick: function () { App.go('quote', { forType: 'Lead', partyId: r.id }); } })
+          ];
+        } }
+    ];
+    return App.table(cols, rows, B.filter === 'Open' ? 'No open leads. Add one with the New lead button.' : 'No leads found.');
+  }
+  function lateDays(iso) { var n = App.daysBetween(iso, App.today()); return n === 1 ? '1 day' : n + ' days'; }
+  // ---------- board (kanban) ----------
+  function moveTo(row, status) {
+    if (row.status === status) return Promise.resolve();
+    return App.api('leads.update', { id: row.id, status: status }).then(function () {
+      row.status = status; App.invalidateParties(); App.toast('Moved ' + row.company + ' to ' + status, 'ok');
+      return load();
+    }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function card(r) {
+    var late = r.followUp && r.followUp < App.today();
+    var menuBtn = h('button', { type: 'button', class: 'x', 'aria-label': r.company + ': move or edit' }, App.icon('dots', 18));
+    menuBtn.addEventListener('click', function () {
+      var items = [{ hd: 'Move to' }];
+      App.boot.lists.leadStatuses.forEach(function (s) {
+        if (isClosed(s)) return;
+        items.push({ label: s, disabled: s === r.status, onclick: function () { moveTo(r, s); } });
+      });
+      items.push({ hd: 'Close lead' });
+      ['Business Done', 'Business Lost'].forEach(function (s) {
+        if (App.boot.lists.leadStatuses.indexOf(s) >= 0) items.push({ label: s === 'Business Done' ? 'Business done' : 'Business lost', danger: s === 'Business Lost', onclick: function () { moveTo(r, s); } });
+      });
+      App.menu(menuBtn, items);
+    });
+    var el = h('article', { class: 'kc', draggable: 'true' },
+      h('div', { class: 'kc-t' },
+        h('div', { class: 'kc-w' }, h('i', { text: App.initials(r.company) }), h('div', null, h('b', { text: r.company }), h('small', { class: 'mute', text: [r.contact, r.city].filter(Boolean).join(' · ') }))),
+        menuBtn),
+      r.products ? h('p', { class: 'kc-p', text: r.products }) : null,
+      h('div', { class: 'kc-m' },
+        r.value === '' ? h('span', { class: 'val none', text: 'No value yet' }) : h('span', { class: 'val', text: 'Rs ' + App.inr(r.value, 0) }),
+        r.followUp ? h('span', { class: 'due' + (late ? ' late' : '') }, late ? App.icon('clock', 13) : null, (late ? 'Overdue · ' : 'Follow-up ') + App.fmtShort(r.followUp)) : null),
+      h('div', { class: 'kc-f' },
+        h('span', { class: 'own' }, h('i', { text: App.initials(r.owner || '?').charAt(0) }), [r.owner, r.source].filter(Boolean).join(' · ')),
+        h('span', { class: 'a' },
+          h('button', { type: 'button', class: 'btn sm soft', text: '+ Req', onclick: function () { App.go('requirements', { forType: 'Lead', partyId: r.id }); } }),
+          h('button', { type: 'button', class: 'btn sm', text: 'Quote', onclick: function () { App.go('quote', { forType: 'Lead', partyId: r.id }); } }))));
+    el.addEventListener('dragstart', function (e) {
+      B.dragRow = r; el.classList.add('dragging');
+      try { e.dataTransfer.setData('text/plain', String(r.id)); e.dataTransfer.effectAllowed = 'move'; } catch (x) { /* some browsers */ }
+    });
+    el.addEventListener('dragend', function () { B.dragRow = null; el.classList.remove('dragging'); Array.prototype.forEach.call(document.querySelectorAll('.kcol.over,.cl.over'), function (n) { n.classList.remove('over'); }); });
+    return el;
+  }
+  function dropTarget(el, status) {
+    el.addEventListener('dragover', function (e) { if (B.dragRow) { e.preventDefault(); el.classList.add('over'); } });
+    el.addEventListener('dragleave', function (e) { if (!el.contains(e.relatedTarget)) el.classList.remove('over'); });
+    el.addEventListener('drop', function (e) { e.preventDefault(); el.classList.remove('over'); var r = B.dragRow; B.dragRow = null; if (r) moveTo(r, status); });
+  }
+  function board(all) {
+    var today = App.today();
+    var rows = all.filter(function (r) {
+      if (isClosed(r.status)) return false;
+      if (B.owner && r.owner !== B.owner) return false;
+      if (B.overdueOnly && !(r.followUp && r.followUp < today)) return false;
+      return true;
+    });
+    var stages = App.boot.lists.leadStatuses.filter(function (s) { return !isClosed(s); });
+    rows.forEach(function (r) { if (stages.indexOf(r.status) < 0) stages.push(r.status); });
+    var wrap = h('div');
+    var kb = h('section', { class: 'kb', 'aria-label': 'Lead stages' });
+    stages.forEach(function (st, i) {
+      var list = rows.filter(function (r) { return r.status === st; });
+      var sum = 0, none = 0;
+      list.forEach(function (r) { var v = Number(r.value); if (r.value !== '' && isFinite(v)) sum += v; else none++; });
+      var col = h('div', { class: 'kcol c' + ((i % 6) + 1), role: 'group', 'aria-label': st + ', ' + list.length + ' leads' },
+        h('div', { class: 'kh' }, h('h3', null, st, h('span', { class: 'ct', text: String(list.length) }))),
+        h('div', { class: 'ksum', text: 'Rs ' + App.inr(sum, 0) + (none ? ' · ' + none + ' without value' : '') }));
+      list.forEach(function (r) { col.appendChild(card(r)); });
+      if (!list.length) col.appendChild(h('div', { class: 'empty', text: 'No leads here' }));
+      dropTarget(col, st);
+      kb.appendChild(col);
+    });
+    wrap.appendChild(kb);
+    var closed = h('div', { class: 'closed', 'aria-label': 'Close a lead' });
+    [['Business Done', 'Business done', 'Drop a lead here once the order is confirmed'], ['Business Lost', 'Business lost', 'Drop a lead here to close it as lost']].forEach(function (c) {
+      if (App.boot.lists.leadStatuses.indexOf(c[0]) < 0) return;
+      var z = h('div', { class: 'cl' }, h('div', null, h('b', { text: c[1] }), h('small', { class: 'mute', text: c[2] })),
+        h('button', { type: 'button', class: 'btn sm', text: 'View closed', onclick: function () { B.filter = c[0]; B.chips.set(c[0]); setView('List'); } }));
+      dropTarget(z, c[0]); closed.appendChild(z);
+    });
+    wrap.appendChild(closed);
+    wrap.appendChild(h('p', { class: 'tip', text: 'Drag a card to another stage, or use the ⋯ menu on a card (works with the keyboard and on a phone).' }));
+    return wrap;
+  }
+  App.register('leads', 'Leads', {
+    init: init,
+    show: function () { App.refreshLookups(); load(); }
+  });
+})();
+</script>

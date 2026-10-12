@@ -120,20 +120,29 @@
   }
   function blankForm() { return { id: '', no: '', status: 'Draft', supplier: null, date: App.today(), delivery: '', terms: '', lines: [], uid: 0, grn: null, ui: { lines: {} } }; }
 
-  /** reqIds: accepted requirements to start from (from the Purchase queue); supplierId: their common supplier */
+  /** reqIds: accepted requirements to start from (from the Purchase queue); supplierId: their common supplier.
+      The form opens at once; the supplier list, items and accepted requirements fill in as they arrive. */
   function openNew(reqIds, supplierId) {
     P.F = blankForm();
     setTitle('New purchase order', 'Add accepted requirements, or any item you want to order.');
+    App.clear(P.body).appendChild(h('div', { class: 'dp-b', text: 'Loading suppliers and items…' }));
+    hideButtons(); P.drawer.open();
     Promise.all([PW.suppliers(), App.products(), loadCands()]).then(function () {
+      if (!P.drawer.isOpen()) return;
       if (supplierId) (PW.supplierList || []).forEach(function (s) { if (s.id === supplierId) P.F.supplier = s; });
       var picked = P.cands.filter(function (r) { return reqIds.indexOf(r.id) >= 0; });
       picked.forEach(function (r) { P.F.lines.push(lineFromReq(r)); });
       if (!P.F.lines.length) P.F.lines.push(blankLine());
-      renderForm(); P.drawer.open();
-    }).catch(function (e) { App.toast(e.message, 'err'); });
+      renderForm();
+    }).catch(function (e) { P.drawer.close(); App.toast('Could not open the purchase order form: ' + (e && e.message ? e.message : e), 'err'); });
   }
+  function hideButtons() { Object.keys(P.btn).forEach(function (k) { P.btn[k].hidden = k !== 'cancel'; }); }
   function openPo(id) {
+    setTitle('Purchase order', '');
+    App.clear(P.body).appendChild(h('div', { class: 'dp-b', text: 'Loading…' }));
+    hideButtons(); P.drawer.open();
     return Promise.all([App.api('po.get', { id: id }), PW.suppliers(), App.products(), loadCands()]).then(function (res) {
+      if (!P.drawer.isOpen()) return;
       var d = res[0], F = blankForm();
       F.id = d.id; F.no = d.no; F.status = d.status; F.date = d.date; F.delivery = d.delivery; F.terms = d.terms; F.grn = d.grn; F.pdf = d.pdf;
       (PW.supplierList || []).forEach(function (s) { if (s.id === d.supplierId) F.supplier = s; });
@@ -145,8 +154,8 @@
       });
       if (!F.lines.length && d.status === 'Draft') F.lines.push(blankLine());
       setTitle(d.status === 'Draft' ? 'Edit ' + d.no : d.no, d.status === 'Draft' ? 'Draft - not sent yet' : 'Sent - this order can no longer be changed');
-      renderForm(); P.drawer.open();
-    }).catch(function (e) { App.toast(e.message, 'err'); });
+      renderForm();
+    }).catch(function (e) { P.drawer.close(); App.toast('Could not open the purchase order: ' + (e && e.message ? e.message : e), 'err'); });
   }
   function loadCands() {
     return App.api('pq.list', { filter: 'Accepted' }).then(function (d) { P.cands = d.rows; return d; });

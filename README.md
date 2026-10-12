@@ -64,8 +64,13 @@ Checked locally against a mock of the sheet that re-implements the `(auto)` form
 
 Not verifiable outside Google, so test once after deploying: PDF creation and Drive folders (PO PDF, audit photo), `LockService`, and sign-in by email. Suggested smoke test: as Procurement accept a requirement → make and send a PO → open its PDF; as Warehouse receive it, put it away, then pick/pack/book/dispatch a Sales order; add an audit count; as Accounts approve it.
 
+## If something looks wrong
+
+- **A tab is missing, or code is printed on the page.** A board file lost its first line (`<script>`) or its last line (`</script>`) when it was pasted. The page now shows a red message naming the tab that did not load. Open that file in Apps Script and check the first and last line. Every board file starts with `<script>` and ends with `</script>`; `DeptStyles` starts with `<style>` and ends with `</style>`.
+- **A button seems to do nothing.** Lists read the sheet when opened; the first open after a few minutes can take a few seconds on a large Products tab. The purchase order form now opens at once and fills in; if something genuinely fails, a red message appears at the bottom right. Tell me what it says.
+
 ## Limits / next steps
 
-- Each action re-reads the tabs it needs (the Products tab is read on most lists). Fine at today's size; cache with `CacheService` if lists feel slow.
+- Each action re-reads the tabs it needs. The Products tab (the biggest) is cached for 2 minutes and the cache is dropped after every write, so a new item is available straight away and an item added by hand in the sheet is found even before the 2 minutes are up.
 - Tab bubbles carry the counts (Procurement: requirements awaiting decision and draft POs; Warehouse: deliveries to receive, lines to put away, orders to ship, counts to review). The bell only knows the Sales-style items, so it works on the Procurement page (requirements awaiting decision) and stays empty on the Warehouse page.
 - Accounts' own screens (purchase receipts, order receipts) are not built.

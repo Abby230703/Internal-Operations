@@ -76,6 +76,16 @@
   <? cfg.includes.forEach(function (f) { ?>
   <?!= include(f) ?>
   <? }); ?>
-  <script>App.start();</script>
+  <script>
+    /* PW: if a board file did not load (for example its opening or closing script tag was lost when pasting), say so */
+    (function () {
+      var want = <?!= JSON.stringify(cfg.boards) ?>, have = App.order.map(function (o) { return o.name; });
+      var miss = want.filter(function (b) { return have.indexOf(b) < 0; });
+      if (miss.length) setTimeout(function () {
+        App.toast('These tabs did not load: ' + miss.join(', ') + '. Open the matching board file in Apps Script: it must start with ' + '<' + 'script> and end with ' + '<' + '/script>.', 'err');
+      }, 1200);
+    })();
+    App.start();
+  </script>
 </body>
 </html>

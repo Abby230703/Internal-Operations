@@ -249,9 +249,10 @@ var ProcApi = {
     return raw.map(function (l, i) {
       var n = 'Line ' + (i + 1) + ': ', code = U.s(l.itemCode), desc = U.s(l.desc);
       if (!code && !desc) throw new Error(n + 'pick an item, or type the name of a new item.');
-      if (code && !items[code]) throw new Error(n + 'item ' + code + ' is not in Products.');
-      var pcs = U.toNum(l.pcs); if (!(pcs >= 1)) pcs = code ? items[code].pcs : 1;
-      var sets = U.toNum(l.sets), rate = U.toNum(l.rate), g = U.s(l.gst) === '' ? (code ? items[code].gst : 0) : U.frac(l.gst);
+      var prod = code ? Items.get(code) : null;
+      if (code && !prod) throw new Error(n + 'item ' + code + ' is not in Products.');
+      var pcs = U.toNum(l.pcs); if (!(pcs >= 1)) pcs = prod ? prod.pcs : 1;
+      var sets = U.toNum(l.sets), rate = U.toNum(l.rate), g = U.s(l.gst) === '' ? (prod ? prod.gst : 0) : U.frac(l.gst);
       if (!(sets > 0)) throw new Error(n + 'enter the quantity in sets.');
       if (isNaN(rate)) rate = 0;
       if (rate < 0) throw new Error(n + 'the rate cannot be negative.');

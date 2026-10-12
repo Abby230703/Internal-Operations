@@ -39,7 +39,7 @@ function api(name, argsJson) {
     }
     var args = argsJson ? JSON.parse(argsJson) : {};
     var data = entry[1]
-      ? Main.locked(function () { return entry[0](args, user); })
+      ? Main.locked(function () { try { return entry[0](args, user); } finally { Items.dropCache(); } })   // PW: stock numbers change on every write
       : entry[0](args, user);
     res = { ok: true, data: data === undefined ? null : data };
   } catch (e) {

@@ -257,7 +257,7 @@ var WhApi = {
     if (!g || WhApi.grnStatus_(g) !== 'Received') throw new Error('Mark the goods as received first (Receiving tab).');
     var items = Items.map(), code = U.s(r['Item Code']) || U.s(a.itemCode);
     if (!code) throw new Error('This line has no item code yet. Pick the item first.');
-    if (!items[code]) throw new Error('Item ' + code + ' is not in Products. Add it first (Stock tab > New item).');
+    if (!Items.get(code)) throw new Error('Item ' + code + ' is not in Products. Add it first (Stock tab > New item).');
     var loc = U.s(a.location);
     if (!WhApi.locSet_()[loc]) throw new Error('Pick a location from the list.');
     var L = WhApi.lineOut_(r, items);
@@ -343,7 +343,7 @@ var WhApi = {
     };
     if (!isNaN(gst)) { if (gst < 0 || gst > 100) throw new Error('GST must be between 0 and 100 %.'); obj['GST_Pct'] = gst / 100; }
     Db.append('products', [obj], { 'GST_Pct': '0.00%' });
-    Catalog._codes = null; Items.reset();
+    Catalog._codes = null; Items.dropCache();
     return { code: code };
   },
 
@@ -444,7 +444,7 @@ var WhApi = {
 
   /** args: { filter: 'Open' | 'Ready' | 'Dispatched' | 'All', search } */
   dispList: function (a) {
-    var items = Items.map(), lines = Rows.group(Db.readAll('orderLines'), 'Order ID'), f = U.s(a.filter) || 'Open', q = U.s(a.search);
+    var items = {}, lines = Rows.group(Db.readAll('orderLines'), 'Order ID'), f = U.s(a.filter) || 'Open', q = U.s(a.search);   // counts only: no product read needed
     var stages = {}, all = Db.readAll('orders').map(function (o) {
       var id = U.s(o['Order ID']), ls = (lines[id] || []).map(function (r) { return WhApi.line2_(r, items); });
       var stage = U.s(o['Stage (auto)']) || WhApi.stage_(o, ls), sets = 0, open = 0;
@@ -595,7 +595,7 @@ var WhApi = {
 
   // ---------- numbers for tab badges ----------
   counts: function () {
-    var toReceive = 0, pend = 0, items = Items.map();
+    var toReceive = 0, pend = 0, items = {};      // counts only: no product read needed
     var grns = Db.readAll('grn'), by = Rows.by(grns, 'GRN ID');
     grns.forEach(function (g) { if (WhApi.grnStatus_(g) !== 'Received') toReceive++; });
     Db.readAll('grnLines').forEach(function (r) {

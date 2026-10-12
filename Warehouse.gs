@@ -4,7 +4,7 @@
  * Stock Movement is the stock ledger and is ADD-ONLY. It is written in exactly three places:
  *   put-away      +pieces at a location  (type "Put-away", Ref ID = GRN line)
  *   dispatch      -pieces at the pick location (type "Dispatch", Ref ID = sales order line)
- *   audit adj     +/- variance when Accounts approves a count (type "Audit adj", Ref ID = count)
+ *   audit adj     +/- variance when Accounts approves a count (type "Audit adj.", Ref ID = count)
  * Quantities in the ledger, Damaged Qty, Put_Qty and Counted Qty are PIECES; order and GRN line quantities are SETS.
  *
  * Sales order flow (the sheet's own Stage (auto) formula): To pick -> To pack -> Book transport -> Ready to dispatch -> Dispatched.
@@ -96,7 +96,7 @@ var WhApi = {
       id: U.s(r['Line ID']), grnId: U.s(r['GRN ID']), purchaseLineId: U.s(r['Purchase Line ID']), itemCode: code, desc: U.s(r['Description']),
       name: p ? (p.name || code) : U.s(r['Description']), supItemCode: U.s(r['Supplier item code']), per: per,
       expSets: isNaN(expSets) ? 0 : expSets, recSets: rec, damaged: isNaN(dmg) ? 0 : dmg,
-      stickered: r['Stickered'] === true, stickeredQty: isNaN(sq) ? 0 : sq, putAway: r['Put Away'] === true, putQty: isNaN(pq) ? 0 : pq,
+      stickered: Rows.stickerIn(r['Stickered']), stickeredQty: isNaN(sq) ? 0 : sq, putAway: r['Put Away'] === true, putQty: isNaN(pq) ? 0 : pq,
       location: U.s(r['Location']), goodPcs: rec === '' ? 0 : Math.max(0, U.r4(rec * per - (isNaN(dmg) ? 0 : dmg))), unplanned: !U.s(r['Purchase Line ID']), row: r._row
     };
   },
@@ -178,7 +178,7 @@ var WhApi = {
       var sq = U.toNum(l.stickeredQty); if (isNaN(sq) || sq < 0) sq = 0;
       var obj = {
         'Received No. of Sets': sets === '' ? '' : Rows.sets(sets), 'Received pcs / set': per, 'Damaged Qty': U.r4(dmg),
-        'Stickered': l.stickered === true, 'Stickered Qty': l.stickered === true ? U.r4(sq) : 0
+        'Stickered': Rows.stickerOut(l.stickered === true), 'Stickered Qty': l.stickered === true ? U.r4(sq) : 0
       };
       if (!U.s(r['Item Code']) && U.s(l.itemCode)) {
         var raw = Items.raw(U.s(l.itemCode));
@@ -217,7 +217,7 @@ var WhApi = {
       Db.append('grnLines', fresh.map(function (l) {
         return {
           'Line ID': U.newId(taken), 'GRN ID': id, 'Item Code': l.code ? Items.raw(l.code) : '', 'Description': l.desc, 'Supplier item code': l.sup,
-          'Received pcs / set': l.per, 'Received No. of Sets': l.sets, 'Damaged Qty': l.dmg, 'Stickered': false, 'Put Away': false
+          'Received pcs / set': l.per, 'Received No. of Sets': l.sets, 'Damaged Qty': l.dmg, 'Stickered': Rows.stickerOut(false), 'Put Away': false
         };
       }));
     }
@@ -268,7 +268,7 @@ var WhApi = {
     var per = L.per, split = good - put > 1e-6;
     var upd = { 'Put Away': true, 'Put Away By': user.email, 'Put_Qty': U.r4(put), 'Location': loc };
     if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
-    if (a.stickered === true) upd['Stickered'] = true;
+    if (a.stickered === true) upd['Stickered'] = Rows.stickerOut(true);
     var newRow = 0;
     if (split) {
       upd['Received No. of Sets'] = Rows.sets((put + L.damaged) / per);        // the damaged pieces stay with the part that is put away
@@ -277,7 +277,7 @@ var WhApi = {
         'Line ID': U.newId(U.idSet(tbl, 'Line ID')), 'GRN ID': U.s(r['GRN ID']), 'Purchase Line ID': U.s(r['Purchase Line ID']), 'Item Code': Items.raw(code),
         'Description': U.s(r['Description']), 'Supplier item code': U.s(r['Supplier item code']), 'Expected pcs / set': r['Expected pcs / set'],
         'Received pcs / set': per, 'Received No. of Sets': Rows.sets((good - put) / per), 'Damaged Qty': 0,
-        'Stickered': L.stickered || a.stickered === true, 'Put Away': false
+        'Stickered': Rows.stickerOut(L.stickered || a.stickered === true), 'Put Away': false
       }])[0];
     }
     try {
@@ -411,7 +411,7 @@ var WhApi = {
       if (!WhApi.locSet_()[loc]) throw new Error('The location on this count is not in the Locations tab.');
       var sys = Ledger.at(Ledger.balances(), code, loc), counted = U.toNum(r['Counted Qty']), diff = U.r4((isNaN(counted) ? 0 : counted) - sys);
       if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
-      if (Math.abs(diff) > 1e-9) Ledger.add([{ code: code, loc: loc, qty: diff, type: 'Audit adj', ref: U.s(r['Count ID']) }], user);
+      if (Math.abs(diff) > 1e-9) Ledger.add([{ code: code, loc: loc, qty: diff, type: 'Audit adj.', ref: U.s(r['Count ID']) }], user);
       out.adjusted = diff; out.system = sys;
     }
     Db.update('audit', r._row, upd);
@@ -549,7 +549,7 @@ var WhApi = {
     var o = WhApi.order_(a.orderId), items = Items.map(), id = U.s(o['Order ID']);
     WhApi.mustBeOpen_(o);
     if (o['Transport Booked'] !== true) throw new Error('Book the transport first.');
-    var date = U.dateFromIso(U.s(a.date) || U.isoToday());
+    var dispIso = U.s(a.date) || U.isoToday(), date = U.dateFromIso(dispIso);
     if (!date) throw new Error('The dispatch date is not valid.');
     var allRows = Db.readAll('orderLines').filter(function (r) { return U.s(r['Order ID']) === id; }), mine = Rows.by(allRows, 'Line ID');
     var bal = Ledger.balances(), need = {}, plan = [], warnings = [];
@@ -578,7 +578,7 @@ var WhApi = {
     Ledger.add(entries, user);
     plan.forEach(function (p) {
       var total = U.r4(p.l.dispatchedSets + p.sets), full = total >= p.l.sets - 1e-9;
-      Db.update('orderLines', p.l.row, { 'Dispatched Qty': total, 'Dispatched': full, 'Dispatch Date': date, 'Dispatched By': user.email });
+      Db.update('orderLines', p.l.row, { 'Dispatched Qty': total, 'Dispatched': full, 'Dispatch Date': Rows.serial(dispIso), 'Dispatched By': user.email });
       p.l.dispatchedSets = total; p.l.open = full ? 0 : U.r4(p.l.sets - total); p.l.dispatched = full;
     });
     var left = allRows.some(function (r) {

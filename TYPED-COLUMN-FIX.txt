@@ -1,0 +1,169 @@
+FIX: "You can't set the number format of cells in a typed column"  (adding a stock top-up, and two related spots)
+========================================================================================
+
+Cause
+  Your sheet's tables have TYPED columns (date, drop-down, number). The sheet refuses a number format on a typed column,
+  and writing a JavaScript Date into a typed DATE column makes it try. Two columns the new code wrote dates into are typed:
+     Requirements > Req Date          (the Stock top-up)
+     Sales Order Lines > Dispatch Date (dispatching an order; would have failed the same way)
+  The fix writes those dates as their serial number: the column shows it in its own date format.
+
+  The same table definitions showed two more mismatches, fixed here too:
+     GRN Lines > Stickered is a drop-down (Done / Left); the code was writing TRUE / FALSE.
+     Stock Movement > Type drop-down says "Audit adj." (with the dot); the code wrote "Audit adj".
+
+Three files change: Items.gs, Procurement.gs, Warehouse.gs. Apply each edit: find the FIND block (it is unique in the file),
+replace it with the REPLACE block. Then redeploy a new version.
+
+Also check (Db.gs, not changed here): it must still contain this guard. If it does not, add it.
+     setFormat_: function (range, f) {
+       try { range.setNumberFormat(f); } catch (e) { /* typed column - keeps its own format */ }
+     },
+  and Db.append / Db.update must call Db.setFormat_(...) instead of calling range.setNumberFormat(...) directly.
+
+Optional, Sales side: ReqApi.create (RequirementsApi.gs) writes  'Req Date': U.today()  into the same typed column. If
+"Save requirement" on the Sales Requirements screen ever shows the same message, change that one value to
+     'Req Date': Rows.serial(U.isoToday())
+(Rows.serial is defined by the Items.gs edit below.)
+
+########################################################################################
+# FILE: Items.gs
+########################################################################################
+
+----- EDIT 1  (Items.gs) -----
+FIND:
+      sets: function (n) { return Math.round((Number(n) + 1e-12) * 1e8) / 1e8; },
+      byName: function (a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0; },
+REPLACE WITH:
+      sets: function (n) { return Math.round((Number(n) + 1e-12) * 1e8) / 1e8; },
+      /**
+       * A date for a TYPED date column (Requirements > Req Date, Sales Order Lines > Dispatch Date). The sheet refuses a number
+       * format on a typed column, and writing a Date object makes it try, so write the date as its serial number: the column
+       * shows it in its own date format. iso = 'yyyy-mm-dd'.
+       */
+      serial: function (iso) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(U.s(iso));
+        return m ? Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000) : '';
+      },
+      /** GRN Lines > Stickered is a Done / Left drop-down (older rows may hold TRUE / FALSE) */
+      stickerOut: function (on) { return on ? 'Done' : 'Left'; },
+      stickerIn: function (v) { return v === true || /^(done|true)$/i.test(U.s(v)); },
+      byName: function (a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0; },
+
+########################################################################################
+# FILE: Procurement.gs
+########################################################################################
+
+----- EDIT 2  (Procurement.gs) -----
+FIND:
+        Db.append('requirements', [{
+          'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need,
+          'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
+REPLACE WITH:
+        Db.append('requirements', [{
+          'Req ID': id, 'Req Date': Rows.serial(U.isoToday()), 'Salesman': user.email, 'Need By': need,
+          'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
+
+----- EDIT 3  (Procurement.gs) -----
+FIND:
+              'Expected pcs / set': U.toNum(r['Pcs / Set']) >= 1 ? U.toNum(r['Pcs / Set']) : Items.pcs(code, 1),
+              'Expected No. of Sets': U.toNum(r['No. of Set']), 'Damaged Qty': 0, 'Stickered': false, 'Put Away': false
+            };
+REPLACE WITH:
+              'Expected pcs / set': U.toNum(r['Pcs / Set']) >= 1 ? U.toNum(r['Pcs / Set']) : Items.pcs(code, 1),
+              'Expected No. of Sets': U.toNum(r['No. of Set']), 'Damaged Qty': 0, 'Stickered': Rows.stickerOut(false), 'Put Away': false
+            };
+
+########################################################################################
+# FILE: Warehouse.gs
+########################################################################################
+
+----- EDIT 4  (Warehouse.gs) -----
+FIND:
+     *   dispatch      -pieces at the pick location (type "Dispatch", Ref ID = sales order line)
+     *   audit adj     +/- variance when Accounts approves a count (type "Audit adj", Ref ID = count)
+     * Quantities in the ledger, Damaged Qty, Put_Qty and Counted Qty are PIECES; order and GRN line quantities are SETS.
+REPLACE WITH:
+     *   dispatch      -pieces at the pick location (type "Dispatch", Ref ID = sales order line)
+     *   audit adj     +/- variance when Accounts approves a count (type "Audit adj.", Ref ID = count)
+     * Quantities in the ledger, Damaged Qty, Put_Qty and Counted Qty are PIECES; order and GRN line quantities are SETS.
+
+----- EDIT 5  (Warehouse.gs) -----
+FIND:
+          expSets: isNaN(expSets) ? 0 : expSets, recSets: rec, damaged: isNaN(dmg) ? 0 : dmg,
+          stickered: r['Stickered'] === true, stickeredQty: isNaN(sq) ? 0 : sq, putAway: r['Put Away'] === true, putQty: isNaN(pq) ? 0 : pq,
+          location: U.s(r['Location']), goodPcs: rec === '' ? 0 : Math.max(0, U.r4(rec * per - (isNaN(dmg) ? 0 : dmg))), unplanned: !U.s(r['Purchase Line ID']), row: r._row
+REPLACE WITH:
+          expSets: isNaN(expSets) ? 0 : expSets, recSets: rec, damaged: isNaN(dmg) ? 0 : dmg,
+          stickered: Rows.stickerIn(r['Stickered']), stickeredQty: isNaN(sq) ? 0 : sq, putAway: r['Put Away'] === true, putQty: isNaN(pq) ? 0 : pq,
+          location: U.s(r['Location']), goodPcs: rec === '' ? 0 : Math.max(0, U.r4(rec * per - (isNaN(dmg) ? 0 : dmg))), unplanned: !U.s(r['Purchase Line ID']), row: r._row
+
+----- EDIT 6  (Warehouse.gs) -----
+FIND:
+            'Received No. of Sets': sets === '' ? '' : Rows.sets(sets), 'Received pcs / set': per, 'Damaged Qty': U.r4(dmg),
+            'Stickered': l.stickered === true, 'Stickered Qty': l.stickered === true ? U.r4(sq) : 0
+          };
+REPLACE WITH:
+            'Received No. of Sets': sets === '' ? '' : Rows.sets(sets), 'Received pcs / set': per, 'Damaged Qty': U.r4(dmg),
+            'Stickered': Rows.stickerOut(l.stickered === true), 'Stickered Qty': l.stickered === true ? U.r4(sq) : 0
+          };
+
+----- EDIT 7  (Warehouse.gs) -----
+FIND:
+              'Line ID': U.newId(taken), 'GRN ID': id, 'Item Code': l.code ? Items.raw(l.code) : '', 'Description': l.desc, 'Supplier item code': l.sup,
+              'Received pcs / set': l.per, 'Received No. of Sets': l.sets, 'Damaged Qty': l.dmg, 'Stickered': false, 'Put Away': false
+            };
+REPLACE WITH:
+              'Line ID': U.newId(taken), 'GRN ID': id, 'Item Code': l.code ? Items.raw(l.code) : '', 'Description': l.desc, 'Supplier item code': l.sup,
+              'Received pcs / set': l.per, 'Received No. of Sets': l.sets, 'Damaged Qty': l.dmg, 'Stickered': Rows.stickerOut(false), 'Put Away': false
+            };
+
+----- EDIT 8  (Warehouse.gs) -----
+FIND:
+        if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
+        if (a.stickered === true) upd['Stickered'] = true;
+        var newRow = 0;
+REPLACE WITH:
+        if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
+        if (a.stickered === true) upd['Stickered'] = Rows.stickerOut(true);
+        var newRow = 0;
+
+----- EDIT 9  (Warehouse.gs) -----
+FIND:
+            'Received pcs / set': per, 'Received No. of Sets': Rows.sets((good - put) / per), 'Damaged Qty': 0,
+            'Stickered': L.stickered || a.stickered === true, 'Put Away': false
+          }])[0];
+REPLACE WITH:
+            'Received pcs / set': per, 'Received No. of Sets': Rows.sets((good - put) / per), 'Damaged Qty': 0,
+            'Stickered': Rows.stickerOut(L.stickered || a.stickered === true), 'Put Away': false
+          }])[0];
+
+----- EDIT 10  (Warehouse.gs) -----
+FIND:
+          if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
+          if (Math.abs(diff) > 1e-9) Ledger.add([{ code: code, loc: loc, qty: diff, type: 'Audit adj', ref: U.s(r['Count ID']) }], user);
+          out.adjusted = diff; out.system = sys;
+REPLACE WITH:
+          if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
+          if (Math.abs(diff) > 1e-9) Ledger.add([{ code: code, loc: loc, qty: diff, type: 'Audit adj.', ref: U.s(r['Count ID']) }], user);
+          out.adjusted = diff; out.system = sys;
+
+----- EDIT 11  (Warehouse.gs) -----
+FIND:
+        if (o['Transport Booked'] !== true) throw new Error('Book the transport first.');
+        var date = U.dateFromIso(U.s(a.date) || U.isoToday());
+        if (!date) throw new Error('The dispatch date is not valid.');
+REPLACE WITH:
+        if (o['Transport Booked'] !== true) throw new Error('Book the transport first.');
+        var dispIso = U.s(a.date) || U.isoToday(), date = U.dateFromIso(dispIso);
+        if (!date) throw new Error('The dispatch date is not valid.');
+
+----- EDIT 12  (Warehouse.gs) -----
+FIND:
+          var total = U.r4(p.l.dispatchedSets + p.sets), full = total >= p.l.sets - 1e-9;
+          Db.update('orderLines', p.l.row, { 'Dispatched Qty': total, 'Dispatched': full, 'Dispatch Date': date, 'Dispatched By': user.email });
+          p.l.dispatchedSets = total; p.l.open = full ? 0 : U.r4(p.l.sets - total); p.l.dispatched = full;
+REPLACE WITH:
+          var total = U.r4(p.l.dispatchedSets + p.sets), full = total >= p.l.sets - 1e-9;
+          Db.update('orderLines', p.l.row, { 'Dispatched Qty': total, 'Dispatched': full, 'Dispatch Date': Rows.serial(dispIso), 'Dispatched By': user.email });
+          p.l.dispatchedSets = total; p.l.open = full ? 0 : U.r4(p.l.sets - total); p.l.dispatched = full;

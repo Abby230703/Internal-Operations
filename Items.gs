@@ -121,6 +121,18 @@ var Rows = {
   },
   /** sets can be a fraction (a part-set); keep enough decimals that sets x pieces-per-set gives whole pieces back */
   sets: function (n) { return Math.round((Number(n) + 1e-12) * 1e8) / 1e8; },
+  /**
+   * A date for a TYPED date column (Requirements > Req Date, Sales Order Lines > Dispatch Date). The sheet refuses a number
+   * format on a typed column, and writing a Date object makes it try, so write the date as its serial number: the column
+   * shows it in its own date format. iso = 'yyyy-mm-dd'.
+   */
+  serial: function (iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(U.s(iso));
+    return m ? Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000) : '';
+  },
+  /** GRN Lines > Stickered is a Done / Left drop-down (older rows may hold TRUE / FALSE) */
+  stickerOut: function (on) { return on ? 'Done' : 'Left'; },
+  stickerIn: function (v) { return v === true || /^(done|true)$/i.test(U.s(v)); },
   byName: function (a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0; },
   matches: function (hay, q) {
     var toks = U.low(q).split(/\s+/).filter(Boolean), h = U.low(hay);

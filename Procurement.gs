@@ -172,7 +172,7 @@ var ProcApi = {
     if (U.s(a.needBy)) { need = U.dateFromIso(a.needBy); if (!need) throw new Error('"Need by" date is not valid.'); }
     var id = U.newId(U.idSet(Db.readAll('requirements'), 'Req ID'));
     Db.append('requirements', [{
-      'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need,
+      'Req ID': id, 'Req Date': Rows.serial(U.isoToday()), 'Salesman': user.email, 'Need By': need,
       'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
     }]);
     return { id: id };
@@ -345,7 +345,7 @@ var ProcApi = {
           'Line ID': U.newId(taken), 'GRN ID': gid, 'Purchase Line ID': U.s(r['Line ID']), 'Item Code': code ? Items.raw(code) : '',
           'Description': U.s(r['Description']), 'Supplier item code': U.s(r['Supplier Item Code']),
           'Expected pcs / set': U.toNum(r['Pcs / Set']) >= 1 ? U.toNum(r['Pcs / Set']) : Items.pcs(code, 1),
-          'Expected No. of Sets': U.toNum(r['No. of Set']), 'Damaged Qty': 0, 'Stickered': false, 'Put Away': false
+          'Expected No. of Sets': U.toNum(r['No. of Set']), 'Damaged Qty': 0, 'Stickered': Rows.stickerOut(false), 'Put Away': false
         };
       }));
     }

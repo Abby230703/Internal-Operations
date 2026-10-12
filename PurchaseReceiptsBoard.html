@@ -1,0 +1,134 @@
+<script>
+/* PurchaseReceiptsBoard.html - Accounts: the supplier side. Each delivery (GRN) gets its bill (Bill Amount + Tally purchase voucher),
+   then every payment to the supplier is recorded against it. A part payment is simply another payment. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('accounts')) return;
+  var LABELS = ['To bill', 'To pay', 'Paid', 'Not received', 'All'];
+  var B = { filter: 'To bill', search: '', seq: 0, rows: [], d: null, listBox: null, countBox: null, statBox: null, chips: null, drawer: null, body: null, G: null };
+
+  function init(root) {
+    B.chips = App.seg({
+      cls: 'chips-s', label: 'Filter deliveries', value: B.filter,
+      options: LABELS.map(function (l) { return { v: l, label: l }; }), onChange: function (v) { B.filter = v; load(); }
+    });
+    var search = PW.search('Search GRN, PO, supplier, invoice, voucher…', 'Search deliveries', function (v) { B.search = v; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div'); B.statBox = h('div', { class: 'stats', style: 'margin:18px 0' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Purchase receipts' }),
+      h('p', { text: 'When goods arrive, enter the supplier’s bill from Tally. Then record each payment you make against it.' }))));
+    root.appendChild(B.statBox);
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Deliveries' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+    B.body = h('div');
+    B.drawer = App.drawer({ title: 'Delivery', wide: true, body: B.body, footer: [h('button', { type: 'button', class: 'btn', text: 'Close', onclick: function () { B.drawer.close(); } })] });
+  }
+
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('bill.list', { filter: B.filter, search: B.search }).then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.d = d;
+      PW.badge('billpay', d.counts.toBill + d.sum.overdueCount, 'Deliveries to bill and overdue supplier bills');
+      PW.chipCounts(B.chips, LABELS, [d.counts.toBill, d.counts.toPay, 0, 0, 0]);
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' delivery' : ' deliveries') + (d.shown > d.rows.length ? ' (showing ' + d.rows.length + ': search to narrow it down)' : '');
+      App.clear(B.statBox);
+      [PW.stat('Received, not billed', d.counts.toBill, 'deliveries waiting for the supplier’s bill'),
+       PW.stat('To pay', PW.rs(d.sum.payable), d.counts.toPay + (d.counts.toPay === 1 ? ' bill open' : ' bills open')),
+       PW.stat('Overdue', PW.rs(d.sum.overdue), d.sum.overdueCount + (d.sum.overdueCount === 1 ? ' bill' : ' bills'), d.sum.overdueCount ? 'c' : 'g'),
+       PW.stat('Paid this month', PW.rs(d.sum.paidMonth), '', 'g')].forEach(function (n) { B.statBox.appendChild(n); });
+      renderList();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'deliveries', e); } });
+  }
+  function badge(b) {
+    return App.badge(b.state, { 'To bill': 'amber', 'To pay': 'blue', 'Overdue': 'red', 'Paid': 'green', 'Not received': '' }[b.state]);
+  }
+  function renderList() {
+    var cols = [
+      { h: 'Delivery', f: function (b) {
+          var o = h('button', { type: 'button', class: 'ordno', text: b.no, 'aria-label': 'Open ' + b.no });
+          o.addEventListener('click', function () { openBill(b.id); });
+          return [o, h('span', { class: 'sub', text: b.poNo ? 'PO ' + b.poNo : 'No PO' })]; } },
+      { h: 'Supplier', f: function (b) { return [b.supplier || '–', b.terms ? h('span', { class: 'sub', text: b.terms }) : null]; } },
+      { h: 'Received', f: function (b) { return b.receivedDate ? App.fmtDate(b.receivedDate) : (b.received ? 'Yes' : h('span', { class: 'dash', text: 'Not yet' })); } },
+      { h: 'Supplier invoice', f: function (b) { return b.invoiceNo ? [b.invoiceNo, b.invoiceDate ? h('span', { class: 'sub', text: App.fmtDate(b.invoiceDate) }) : null] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Bill', cls: 'num', f: function (b) { return b.billAmount !== null ? [h('span', { class: 'pw-money', text: PW.rs(b.billAmount) }), h('span', { class: 'sub', text: b.voucher })] : [h('span', { class: 'dash', text: '–' }), b.recValue || b.poValue ? h('span', { class: 'sub', text: (b.received && b.recValue ? 'received ' + PW.rs(b.recValue) : 'PO ' + PW.rs(b.poValue)) }) : null]; } },
+      { h: 'Paid', cls: 'num', f: function (b) { return b.paid ? h('span', { class: 'pw-money pw-out', text: PW.rs(b.paid) }) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Balance', cls: 'num', f: function (b) { return b.balance === null ? h('span', { class: 'dash', text: '–' }) : h('span', { class: 'pw-money' + (b.state === 'Overdue' ? ' late' : ''), text: PW.rs(b.balance) }); } },
+      { h: 'Due', f: function (b) { return b.due && b.state !== 'Paid' ? [App.fmtDate(b.due), b.state === 'Overdue' ? h('span', { class: 'sub late', text: b.overdueDays + (b.overdueDays === 1 ? ' day late' : ' days late') }) : null] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Status', f: function (b) { return badge(b); } },
+      { h: '', cls: 'acts', f: function (b) {
+          var primary = b.state === 'To bill' ? 'Add bill' : (b.state === 'To pay' || b.state === 'Overdue' ? 'Pay' : 'View');
+          return h('button', { type: 'button', class: 'btn sm' + (primary === 'View' ? '' : ' primary'), text: primary, onclick: function () { openBill(b.id); } }); } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, B.rows, B.filter === 'To bill' ? 'Every received delivery has its bill.' : (B.filter === 'To pay' ? 'No supplier bill is waiting for payment.' : 'No deliveries found.')));
+  }
+
+  // ---------- one delivery (drawer) ----------
+  function openBill(id) {
+    return App.api('bill.get', { id: id }).then(function (g) { B.G = g; render(); B.drawer.open(); }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function refresh() { return Promise.all([App.api('bill.get', { id: B.G.id }).then(function (g) { B.G = g; render(); }), load()]); }
+  function render() {
+    var g = B.G, billed = g.billAmount !== null;
+    PW.drawerTitle(B.drawer, g.no + (g.poNo ? ' · PO ' + g.poNo : ''), g.supplier + (g.terms ? ' · ' + g.terms : ''));
+    App.clear(B.body);
+    B.body.appendChild(h('div', { class: 'pw-sum' },
+      h('div', null, h('span', { text: 'Value of the order' }), h('b', { text: PW.rs(g.poValue, 2) })),
+      h('div', null, h('span', { text: 'Value of goods received' }), h('b', { text: g.received ? PW.rs(g.recValue, 2) : 'Not received' })),
+      h('div', null, h('span', { text: 'Supplier bill' }), h('b', { text: billed ? PW.rs(g.billAmount, 2) : 'Not entered' })),
+      h('div', null, h('span', { text: 'Paid' }), h('b', { text: PW.rs(g.paid, 2) })),
+      h('div', null, h('span', { text: 'Balance' }), h('b', { class: g.state === 'Overdue' ? 'late' : '', text: billed ? PW.rs(g.balance, 2) : '–' }))));
+    if (g.damaged > 0) B.body.appendChild(h('div', { class: 'note', text: g.damaged + ' pieces arrived damaged. Check whether the supplier’s bill gives credit for them.' }));
+    if (!g.received && !billed) B.body.appendChild(h('div', { class: 'note', text: 'The goods have not arrived yet. You can still pay an advance below.' }));
+
+    var lines = App.table([
+      { h: 'Item', f: function (l) { return [l.name, h('span', { class: 'sub', text: l.itemCode })]; } },
+      { h: 'Ordered / received', cls: 'num', f: function (l) { return [App.fmtQty(l.expSets) + ' / ' + (l.recSets === null ? '–' : App.fmtQty(l.recSets)) + ' sets', h('span', { class: 'sub', text: '× ' + App.fmtQty(l.per) + ' pcs' + (l.damaged ? ' · ' + l.damaged + ' damaged' : '') })]; } },
+      { h: 'Rate / pc', cls: 'num', f: function (l) { return l.rate ? [App.inr(l.rate, 2), h('span', { class: 'sub', text: '+ ' + App.fmtQty(App.r2(l.gst * 100)) + '% GST' })] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Value', cls: 'num', f: function (l) { return l.amount ? App.inr(l.amount, 2) : h('span', { class: 'dash', text: '–' }); } }
+    ], g.lineList, '');
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '1' }), h('h2', { text: 'What arrived' }))),
+      g.lineList.length ? lines : h('div', { class: 'empty', text: 'No lines on this delivery.' })));
+
+    var f = {
+      amount: h('input', { class: 'inp', type: 'number', min: 0, step: '0.01', inputmode: 'decimal', value: billed ? g.billAmount : (g.recValue || g.poValue || '') }),
+      voucher: h('input', { class: 'inp', type: 'text', maxlength: 40, value: g.voucher, placeholder: 'Tally purchase voucher number' }),
+      invNo: h('input', { class: 'inp', type: 'text', maxlength: 60, value: g.invoiceNo, placeholder: 'Number on the supplier’s invoice' }),
+      invDate: h('input', { class: 'inp', type: 'date', value: g.invoiceDate })
+    };
+    var save = h('button', { type: 'button', class: 'btn primary', text: billed ? 'Save changes' : 'Save bill' });
+    save.addEventListener('click', function () {
+      App.run(save, function () {
+        var amt = App.num(f.amount.value);
+        if (isNaN(amt) || amt <= 0) { f.amount.focus(); throw new Error('Enter the bill amount.'); }
+        if (!f.voucher.value.trim()) { f.voucher.focus(); throw new Error('Enter the Tally purchase voucher number.'); }
+        return App.api('bill.save', { id: g.id, billAmount: amt, voucherNo: f.voucher.value, invoiceNo: f.invNo.value, invoiceDate: f.invDate.value }).then(function () {
+          App.toast('Bill saved for ' + g.no, 'ok'); return refresh();
+        });
+      });
+    });
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'Supplier bill' })),
+      billed ? App.badge('Billed', 'green') : App.badge('Not billed', 'amber')),
+      h('div', { class: 'grid' }, App.field('Bill amount (Rs, incl. GST)', f.amount, { required: true, hint: h('span', { class: 'pw-note', text: g.received && g.recValue ? 'Goods received are worth ' + PW.rs(g.recValue, 2) : 'Order value is ' + PW.rs(g.poValue, 2) }) }),
+        App.field('Tally purchase voucher no.', f.voucher, { required: true }), App.field('Supplier invoice no.', f.invNo), App.field('Supplier invoice date', f.invDate)),
+      h('div', { class: 'actions' }, save)));
+
+    var pay = h('button', { type: 'button', class: 'btn primary', text: 'Pay supplier' });
+    pay.addEventListener('click', function () { PW.payDialog({ kind: 'GRN', id: g.id, no: g.no, party: g.supplier, balance: billed ? g.balance : null, onDone: refresh }); });
+    var pays = g.paymentList.map(function (p) {
+      return h('tr', null, h('td', { 'data-l': 'Date', text: App.fmtDate(p.date) }),
+        h('td', { 'data-l': 'Amount', class: 'num' }, h('span', { class: p.direction === 'Paid' ? 'pw-out' : 'pw-in', text: (p.direction === 'Paid' ? '' : '+ ') + PW.rs(p.amount, 2) }), p.direction === 'Received' ? h('span', { class: 'sub', text: 'refund' }) : null),
+        h('td', { 'data-l': 'How', text: p.mode }), h('td', { 'data-l': 'Reference' }, p.referenceNo || h('span', { class: 'dash', text: '–' }), p.notes ? h('span', { class: 'sub', text: p.notes }) : null),
+        h('td', { 'data-l': 'By', text: p.by }),
+        h('td', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm', text: 'Correct', onclick: function () { PW.payDialog({ kind: 'GRN', id: g.id, no: g.no, party: g.supplier, balance: null, pay: p, onDone: refresh }); } })));
+    });
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '3' }), h('h2', { text: 'Payments to the supplier' })), pay),
+      pays.length ? h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, h('tr', null, h('th', { text: 'Date' }), h('th', { class: 'num', text: 'Amount' }), h('th', { text: 'How' }), h('th', { text: 'Reference' }), h('th', { text: 'Entered by' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })))), h('tbody', null, pays)))
+        : h('div', { class: 'empty', text: 'Nothing paid yet.' })));
+  }
+
+  App.register('billpay', 'Purchase receipts', { init: init, show: function () { load(); } });
+})();
+</script>

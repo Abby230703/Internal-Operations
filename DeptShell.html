@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   var App = window.App, h = App.h, noop = function () {};
-  var PW = window.PW = { dept: String(window.DEPT || 'sales').toLowerCase(), label: { sales: 'Sales', procurement: 'Procurement', warehouse: 'Warehouse' } };
+  var PW = window.PW = { dept: String(window.DEPT || 'sales').toLowerCase(), label: { sales: 'Sales', procurement: 'Procurement', warehouse: 'Warehouse', accounts: 'Accounts', admin: 'Admin' } };
   PW.active = function (d) { return PW.dept === d; };
 
   // ---------- icons for the new tabs (Client.html only knows the Sales ones) ----------
@@ -18,7 +18,16 @@
     stock: [['path', { d: 'M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7zM3.3 7 12 12l8.7-5M12 22V12' }]],
     audit: [['path', { d: 'm9 11 3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' }]],
     truck: [['path', { d: 'M1 3h15v13H1zM16 8h4l3 3v5h-7z' }]],
-    pdf: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5' }]]
+    pdf: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5' }]],
+    // Accounts
+    orderpay: [['rect', { x: 2, y: 5, width: 20, height: 14, rx: 2 }], ['path', { d: 'M2 10h20M6 15h4' }]],
+    billpay: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5M9 13h6M9 17h6' }]],
+    payments: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M9 8h6M9 12h6M9 8c4 0 4 5 0 5l4 4' }]],
+    // Admin
+    overview: [['rect', { x: 3, y: 3, width: 7, height: 9, rx: 1.5 }], ['rect', { x: 14, y: 3, width: 7, height: 5, rx: 1.5 }], ['rect', { x: 14, y: 12, width: 7, height: 9, rx: 1.5 }], ['rect', { x: 3, y: 16, width: 7, height: 5, rx: 1.5 }]],
+    users: [['circle', { cx: 9, cy: 8, r: 3.5 }], ['path', { d: 'M2.5 20c.6-3.4 3.2-5.5 6.5-5.5s5.9 2.1 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .7 3.2 2.4 3.5 5.2' }]],
+    products: [['path', { d: 'M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z' }], ['circle', { cx: 7.5, cy: 7.5, r: 1.2 }]],
+    locations: [['path', { d: 'M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0z' }], ['circle', { cx: 12, cy: 10, r: 3 }]]
   };
   var baseIcon = App.icon;
   App.icon = function (name, size) {
@@ -62,13 +71,18 @@
         PW.badge('purchase', d.draft, 'Draft purchase orders');
       }).catch(noop);
     };
+  } else if (PW.dept === 'accounts') {
+    App.refreshAttn = function () {
+      App.api('acc.counts').then(function (d) {
+        PW.badge('orderpay', d.toInvoice + d.overdue, 'Orders to invoice and overdue payments');
+        PW.badge('billpay', d.toBill + d.payOverdue, 'Deliveries to bill and overdue supplier bills');
+        PW.badge('audit', d.audit, 'Counts waiting for review');
+      }).catch(noop);
+    };
+  } else if (PW.dept === 'admin') {
+    App.refreshAttn = noop;        // the Overview board sets its own badge when it loads: the overview reads many tabs
   } else if (PW.dept === 'warehouse') {
     App.refreshAttn = function () {
-      var role = App.boot && App.boot.user ? App.boot.user.role : '';
-      if (role === 'Accounts') {
-        App.api('audit.list', { filter: 'Pending' }).then(function (d) { PW.badge('audit', d.counts.pending, 'Counts waiting for review'); }).catch(noop);
-        return;
-      }
       App.api('wh.counts').then(function (d) {
         PW.badge('receiving', d.receiving, 'Deliveries to receive');
         PW.badge('putaway', d.putaway, 'Lines waiting for a location');
@@ -140,6 +154,93 @@
     box.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { onChange(box.value); }, 300); });
     return box;
   };
+  /** Money as "Rs 1,23,456" (no decimals) or with paise: PW.rs(1234.5, 2) */
+  PW.rs = function (n, dec) { return 'Rs ' + App.inr(n, dec === undefined ? 0 : dec); };
+  /** a number card: PW.stat('To collect', 'Rs 1,200', 'note', 'c') */
+  PW.stat = function (label, value, sub, tone) {
+    return h('div', { class: 'stat' + (tone ? ' ' + tone : '') }, h('i', { text: tone === 'c' ? '!' : (tone === 'g' ? '✓' : '#') }), h('div', null, h('span', { text: label }), h('b', { text: String(value) }), sub ? h('span', { text: sub, style: 'font-weight:500' }) : null));
+  };
+  /** the link to another department's page (read from the department menu), or '' */
+  PW.deptUrl = function (label) {
+    var url = '';
+    Array.prototype.forEach.call(document.querySelectorAll('#dept-menu a.mi'), function (a) {
+      var b = a.querySelector('b');
+      if (b && b.textContent === label) url = a.getAttribute('href');
+    });
+    return url;
+  };
+  /** Put a title (and a line under it) in an App.drawer header */
+  PW.drawerTitle = function (drawer, title, sub) {
+    var head = drawer.el.querySelector('.drawer-h'), h2 = head.querySelector('h2'), p = head.querySelector('p');
+    h2.textContent = title;
+    if (!p) { p = h('p'); h2.parentNode.appendChild(p); }
+    p.textContent = sub || '';
+  };
+  /** Download rows as a spreadsheet-friendly file. cols = [{ h, f(row) }] */
+  PW.csv = function (name, cols, rows) {
+    function q(v) { v = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+    var lines = [cols.map(function (c) { return q(c.h); }).join(',')];
+    rows.forEach(function (r) { lines.push(cols.map(function (c) { return q(c.f(r)); }).join(',')); });
+    var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), a = h('a', { href: URL.createObjectURL(blob), download: name });
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+  /** When is money due? Same reading of the payment terms as the server ("30 days credit", "3 months credit", "100% advance", "After delivery") */
+  PW.dueFrom = function (terms, iso) {
+    var t = String(terms || '').toLowerCase(), m = /(\d+)\s*(day|month)/.exec(t), d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    if (!d) return '';
+    function out(x) { return x.getUTCFullYear() + '-' + ('0' + (x.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + x.getUTCDate()).slice(-2); }
+    if (/credit/.test(t) && m) {
+      var y = +d[1], mo = +d[2] - 1, day = +d[3];
+      if (m[2] === 'day') return out(new Date(Date.UTC(y, mo, day + (+m[1]))));
+      var last = new Date(Date.UTC(y, mo + (+m[1]) + 1, 0)).getUTCDate();
+      return out(new Date(Date.UTC(y, mo + (+m[1]), Math.min(day, last))));
+    }
+    return /advance|after delivery|cash/.test(t) ? iso : '';
+  };
+  /**
+   * Record (or correct) one payment. o: { kind: 'Order' | 'GRN', id, no, party, balance (number or null), pay (an existing payment to correct), onDone() }
+   * An order receipt is money Received, a purchase payment is money Paid; "refund" goes the other way.
+   */
+  PW.payDialog = function (o) {
+    var edit = o.pay || null, isOrder = o.kind === 'Order', modes = (App.boot && App.boot.lists && App.boot.lists.paymentModes) || ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'];
+    var f = {
+      date: h('input', { class: 'inp', type: 'date', value: edit ? edit.date : App.today(), max: App.today() }),
+      amount: h('input', { class: 'inp', type: 'number', min: 0, step: '0.01', inputmode: 'decimal', value: edit ? edit.amount : (o.balance > 0.5 ? o.balance : '') }),
+      mode: PW.select(modes, edit ? edit.mode : 'Bank Transfer', 'inp'),
+      ref: h('input', { class: 'inp', type: 'text', maxlength: 60, value: edit ? edit.referenceNo : '', placeholder: 'UTR / cheque no. / receipt no.' }),
+      notes: h('input', { class: 'inp', type: 'text', maxlength: 200, value: edit ? edit.notes : '', placeholder: 'Optional' })
+    };
+    var refund = edit ? null : PW.check(isOrder ? 'This is a refund to the customer' : 'This is a refund from the supplier', false);
+    var verb = isOrder ? 'Receive' : 'Pay';
+    var body = h('div', null,
+      h('p', { class: 'mute', text: (edit ? 'Correct the payment on ' : (isOrder ? 'Money received for ' : 'Money paid for ')) + o.no + (o.party ? ' · ' + o.party : '') + (o.balance !== null && o.balance !== undefined && !edit ? ' · balance ' + PW.rs(o.balance, 2) : '') }),
+      h('div', { class: 'grid' }, App.field('Date', f.date, { required: true }), App.field('Amount (Rs)', f.amount, { required: true }), App.field('How', f.mode, { required: true }), App.field('Reference', f.ref)),
+      h('div', { style: 'margin-top:12px' }, App.field('Note', f.notes)), refund ? h('div', { style: 'margin-top:10px' }, refund.el) : null);
+    function send(over) {
+      var p = { date: f.date.value, amount: App.num(f.amount.value), mode: f.mode.value, referenceNo: f.ref.value, notes: f.notes.value };
+      if (edit) { p.id = edit.id; return App.api('pay.save', p); }
+      p.kind = o.kind; p.refId = o.id; p.refund = refund.get(); p.confirmOver = !!over;
+      return App.api('pay.add', p);
+    }
+    App.modal({
+      title: edit ? 'Correct payment' : (isOrder ? 'Receive money' : 'Pay supplier'), body: body,
+      buttons: [{ label: 'Cancel' }, { label: edit ? 'Save changes' : verb, kind: 'primary', onclick: function (api, btn) {
+        App.run(btn, function () {
+          var amt = App.num(f.amount.value);
+          if (isNaN(amt) || amt <= 0) { f.amount.focus(); throw new Error('Enter the amount.'); }
+          if (!f.date.value) { f.date.focus(); throw new Error('Enter the date.'); }
+          var over = !edit && !refund.get() && o.balance !== null && o.balance !== undefined && o.balance > 0 && amt > o.balance + 0.5;
+          var go = over ? App.confirm({ title: 'More than the balance', message: PW.rs(amt, 2) + ' is more than the balance of ' + PW.rs(o.balance, 2) + ' on ' + o.no + '. Record it anyway?', ok: 'Record anyway' }) : Promise.resolve(true);
+          return go.then(function (yes) {
+            if (!yes) return null;
+            return send(over).then(function () { api.close(); App.toast(edit ? 'Payment corrected' : (isOrder ? 'Receipt recorded' : 'Payment recorded'), 'ok'); if (o.onDone) return o.onDone(); });
+          });
+        });
+      } }]
+    });
+    f.amount.focus();
+  };
+
   PW.loadError = function (box, what, e) { App.clear(box).appendChild(h('div', { class: 'note err', text: 'Could not load ' + what + ': ' + (e && e.message ? e.message : e) })); };
 })();
 </script>

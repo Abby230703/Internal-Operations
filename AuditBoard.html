@@ -1,11 +1,11 @@
 <script>
-/* AuditBoard.html - stock audit. Warehouse: count what is on a shelf when you are free (pieces) and save it.
+/* AuditBoard.html - stock audit (shared: the Warehouse page and the Accounts page). Warehouse: count what is on a shelf when you are free (pieces) and save it.
    Accounts (and Admin): review each count. Approving makes the ledger match the count (an "Audit adj" line in Stock Movement);
    rejecting changes nothing. System quantity = what the ledger says is at that location. */
 (function () {
   'use strict';
   var App = window.App, h = App.h, PW = window.PW;
-  if (!PW.active('warehouse')) return;
+  if (!PW.active('warehouse') && !PW.active('accounts')) return;
   var LABELS = ['Pending', 'Approved', 'Rejected', 'All'];
   var B = { filter: 'Pending', search: '', seq: 0, rows: [], counts: {}, chips: null, listBox: null, countBox: null, f: {} };
   function role() { return App.boot && App.boot.user ? App.boot.user.role : ''; }

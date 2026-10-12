@@ -1,5 +1,5 @@
 ##############################################################################
-# HOSPI OPS - PROCUREMENT + WAREHOUSE : ALL FILES IN ONE PLACE  (version 3)
+# HOSPI OPS - PROCUREMENT, WAREHOUSE, ACCOUNTS, ADMIN : ALL FILES IN ONE PLACE  (version 4)
 ##############################################################################
 
 HOW TO USE
@@ -7,39 +7,49 @@ HOW TO USE
      (type "Script" = .gs file, type "HTML" = HTML file; do NOT type the extension in the editor),
      select everything in it, and paste the text between its marker lines (not the marker lines themselves).
   2. IMPORTANT FOR EVERY HTML FILE: copy the FIRST line and the LAST line too.
-        - every board file, Index, and DeptShell start with   <script>   and end with   </script>
-          (Index.html is a full page: it starts with <!DOCTYPE html> and ends with </html>)
+        - every board file and DeptShell starts with   <script>   and ends with   </script>
+        - Index.html is a full page: it starts with <!DOCTYPE html> and ends with </html>
         - DeptStyles starts with   <style>   and ends with   </style>
      If the first line is missing, the page prints the file's code as text and that tab does not appear.
   3. Files marked REPLACES overwrite the file you already have. Everything else is NEW.
   4. Do NOT copy over the old kanban script (the one with SHEET_NAME = 'Sales_Leads').
   5. Leave Client, Styles, LeadsBoard, RequirementsBoard, QuoteBoard, OrdersBoard and the other Sales .gs files as they are.
-  6. In the Users tab set roles: Procurement / Warehouse / Accounts (exact spelling). Run runDiagnostics once.
-  7. Deploy a new version. Open ...?dept=procurement and ...?dept=warehouse.
+  6. In the Users tab set roles: Sales / Procurement / Warehouse / Accounts / Admin (exact spelling). Run runDiagnostics once.
+  7. Deploy a new version. Open ...?dept=procurement  ...?dept=warehouse  ...?dept=accounts  ...?dept=admin
+     (Accounts people now open the Accounts page, not the Warehouse page.)
   Full notes (what it does, assumptions, smoke test, troubleshooting) are in the README section at the end.
 
 FILE LIST (paste in any order)
 
-   1. Config                     Script REPLACES your existing Config.gs (your settings are kept; PW: lines are the additions)
-   2. Main                       Script REPLACES your existing Main.gs (PW: lines are the additions)
-   3. Items                      Script NEW
-   4. Procurement                Script NEW
-   5. Warehouse                  Script NEW
-   6. Index                      HTML   REPLACES your existing Index.html (one template for all three departments)
-   7. DeptShell                  HTML   NEW
-   8. DeptStyles                 HTML   NEW
-   9. ProcQueueBoard             HTML   NEW
-  10. PurchaseOrdersBoard        HTML   NEW
-  11. SuppliersBoard             HTML   NEW
-  12. ReceivingBoard             HTML   NEW
-  13. PutAwayBoard               HTML   NEW
-  14. DispatchBoard              HTML   NEW
-  15. StockBoard                 HTML   NEW
-  16. AuditBoard                 HTML   NEW
-  17. OrdersBoard-stage-fix.txt  (optional: 5 small edits to your existing OrdersBoard.html - see the end)
+  1. Config                   Script REPLACES your existing Config.gs (your settings are kept; PW: lines are the additions)
+  2. Main                     Script REPLACES your existing Main.gs (PW: lines are the additions)
+  3. Items                    Script REPLACES Items.gs from the earlier version (adds the date-serial fix) - or NEW if you never added it
+  4. Procurement              Script REPLACES Procurement.gs from the earlier version (date-serial fix) - or NEW
+  5. Warehouse                Script REPLACES Warehouse.gs from the earlier version (date-serial, Done/Left, "Audit adj." fixes) - or NEW
+  6. Accounts                 Script NEW (Accounts department: order receipts, purchase receipts, payments)
+  7. Admin                    Script NEW (Admin department: overview, users, products, locations)
+  8. Index                    HTML   REPLACES your existing Index.html (one template for all five departments)
+  9. DeptShell                HTML   REPLACES DeptShell.html from the earlier version (adds Accounts/Admin icons, badges and helpers) - or NEW
+ 10. DeptStyles               HTML   REPLACES DeptStyles.html from the earlier version (a few more styles) - or NEW
+ 11. ProcQueueBoard           HTML   NEW (unchanged since the earlier version)
+ 12. PurchaseOrdersBoard      HTML   NEW (unchanged since the earlier version)
+ 13. SuppliersBoard           HTML   NEW (unchanged since the earlier version)
+ 14. ReceivingBoard           HTML   NEW (unchanged since the earlier version)
+ 15. PutAwayBoard             HTML   NEW (unchanged since the earlier version)
+ 16. DispatchBoard            HTML   NEW (unchanged since the earlier version)
+ 17. StockBoard               HTML   NEW (unchanged since the earlier version)
+ 18. AuditBoard               HTML   REPLACES AuditBoard.html from the earlier version (now also loads on the Accounts page) - or NEW
+ 19. OrderReceiptsBoard       HTML   NEW (Accounts)
+ 20. PurchaseReceiptsBoard    HTML   NEW (Accounts)
+ 21. PaymentsBoard            HTML   NEW (Accounts)
+ 22. OverviewBoard            HTML   NEW (Admin)
+ 23. ProductsBoard            HTML   NEW (Admin)
+ 24. UsersBoard               HTML   NEW (Admin)
+ 25. LocationsBoard           HTML   NEW (Admin)
+ 26. OrdersBoard-stage-fix.txt (optional: 5 small edits to your existing OrdersBoard.html - see the end)
 
 ##############################################################################
-# FILE 1 of 16 :  Config    [Script file]   REPLACES your existing Config.gs (your settings are kept; PW: lines are the additions)
+# FILE 1 of 25 :  Config    [Script file]   REPLACES your existing Config.gs (your settings are kept; PW: lines are the additions)
 # first line of this file is:  /**
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -50,9 +60,9 @@ FILE LIST (paste in any order)
  * Keep this file plain data: nothing here may call code from other files.
  *
  * CHANGED for Procurement + Warehouse (search "PW:" to see every addition):
- *   - ALLOWED_ROLES / SALES_ROLES / DEPARTMENTS
- *   - PO_PDF_* and AUDIT_PHOTO_* settings
- *   - new tables in TABLES and REQUIRED_HEADERS
+ *   - ALLOWED_ROLES / SALES_ROLES / DEPARTMENTS (Sales, Procurement, Warehouse, Accounts, Admin)
+ *   - PO_PDF_* and AUDIT_PHOTO_* settings, PAYMENT_MODES
+ *   - new tables in TABLES and REQUIRED_HEADERS (incl. Payments)
  */
 
 var CONFIG = {
@@ -66,9 +76,8 @@ var CONFIG = {
   // PW: a server action that does not name its own roles is a Sales action (Admin can always do everything).
   SALES_ROLES: ['Sales'],
 
-  // PW: one web-app URL per department: ...?dept=sales | procurement | warehouse.
+  // PW: one web-app URL per department: ...?dept=sales | procurement | warehouse | accounts | admin.
   // roles = who may open it (Admin may open all). boards = board names, in tab order; includes = HTML files to load.
-  // Accounts has no screens of its own yet: it opens the Warehouse app, where it reviews audit counts.
   DEPARTMENTS: {
     sales: {
       label: 'Sales', initial: 'S', sub: 'Leads, requirements, quotes, orders', roles: ['Sales'],
@@ -81,11 +90,19 @@ var CONFIG = {
       includes: ['ProcQueueBoard', 'PurchaseOrdersBoard', 'SuppliersBoard']
     },
     warehouse: {
-      label: 'Warehouse', initial: 'W', sub: 'Receiving, put-away, dispatch, stock, audit', roles: ['Warehouse', 'Accounts'],
+      label: 'Warehouse', initial: 'W', sub: 'Receiving, put-away, dispatch, stock, audit', roles: ['Warehouse'],
       boards: ['receiving', 'putaway', 'dispatch', 'stock', 'audit'],
-      includes: ['ReceivingBoard', 'PutAwayBoard', 'DispatchBoard', 'StockBoard', 'AuditBoard'],
-      // Accounts only sees these boards (it reviews audit counts)
-      boardsFor: { Accounts: ['audit'] }
+      includes: ['ReceivingBoard', 'PutAwayBoard', 'DispatchBoard', 'StockBoard', 'AuditBoard']
+    },
+    accounts: {
+      label: 'Accounts', initial: 'A', sub: 'Order receipts, purchase receipts, payments, audit review', roles: ['Accounts'],
+      boards: ['orderpay', 'billpay', 'payments', 'audit'],
+      includes: ['OrderReceiptsBoard', 'PurchaseReceiptsBoard', 'PaymentsBoard', 'AuditBoard']      // AuditBoard is shared with Warehouse
+    },
+    admin: {
+      label: 'Admin', initial: 'Ad', sub: 'Overview, products, users, locations', roles: ['Admin'],
+      boards: ['overview', 'products', 'users', 'locations'],
+      includes: ['OverviewBoard', 'ProductsBoard', 'UsersBoard', 'LocationsBoard']
     }
   },
 
@@ -93,6 +110,9 @@ var CONFIG = {
   QUOTE_VALID_DAYS: 7,           // default validity when "Valid until" is left blank
   FOLLOWUP_DEFAULT_DAYS: 7,      // default "next follow-up" for a new lead
   MAX_ROWS: 300,                 // max rows a board loads at once
+
+  // PW: how money was paid or received (the Mode drop-down in the Payments tab)
+  PAYMENT_MODES: ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'],
 
   // PW: Procurement numbering
   PO_PREFIX: 'AE/PO/',
@@ -194,7 +214,9 @@ var TABLES = {
   grn:           { sheet: 'GRN',            headerRow: 1, key: 'GRN ID' },
   grnLines:      { sheet: 'GRN Lines',      headerRow: 1, key: 'Line ID' },
   movement:      { sheet: 'Stock Movement', headerRow: 1, key: 'Move ID' },
-  audit:         { sheet: 'Audit Counts',   headerRow: 1, key: 'Count ID' }
+  audit:         { sheet: 'Audit Counts',   headerRow: 1, key: 'Count ID' },
+  // PW: Accounts
+  payments:      { sheet: 'Payments',       headerRow: 1, key: 'Payment ID' }
 };
 
 /** Headers the code relies on. runDiagnostics() checks them against the sheet. */
@@ -212,30 +234,33 @@ var REQUIRED_HEADERS = {
                'Offer Price', 'GST %', 'Req ID', 'Photo Link'],
   orders: ['Order ID', 'Order No.', 'Order Date', 'Customer', 'Salesman', 'Status', 'Payment Terms', 'Delivery Terms',
            'Proforma Invoice PDF', 'Created At', 'Tally Voucher No.', 'Dispatch Date', 'Stage (auto)',
-           'Dispatched By', 'Transport Booked', 'Transporter', 'LR No.'],
+           'Dispatched By', 'Transport Booked', 'Transporter', 'LR No.',
+           'Invoice Date', 'Due Date', 'Payment Cleared On', 'Invoice Amount'],
   orderLines: ['Line ID', 'Req ID', 'Order ID', 'Item_Code', 'Description', 'Pcs / Set', 'No. of set', 'Offer Price', 'GST %',
                'Pick From', 'Picked', 'Packed', 'Dispatched', 'Dispatch Date', 'Dispatched By', 'Dispatched Qty', 'Open Sets (auto)'],
-  products: ['Item Code', 'Tally Name', 'Catalog Name', 'Pcs / Set', 'List Price', 'GST_Pct', 'Photo_link'],
+  products: ['Item Code', 'Tally Name', 'Catalog Name', 'Pcs / Set', 'List Price', 'GST_Pct', 'Photo_link',
+             'Stock Group', 'HSN', 'Verified', 'Verified_By', 'Verified_On'],
   // PW
-  locations: ['Location Code', 'Description'],
+  locations: ['Location Code', 'Floor', 'Zone', 'Shelf', 'Description'],
   suppliers: ['Supplier ID', 'Supplier Company Name', 'Contact_Name', 'WhatsApp', 'Email', 'GSTIN', 'City', 'Address', 'Product_Categories'],
   purchase: ['Purchase ID', 'Purchase No', 'Purchase Date', 'Supplier Company Name', 'Delivery Date', 'Payment Terms', 'Status', 'PO PDF',
              'Created By', 'Created At'],
   purchaseLines: ['Line ID', 'Req ID', 'Purchase ID', 'Item Code', 'Description', 'Supplier Item Code', 'Supplier Item Name', 'Pcs / Set',
                   'No. of Set', 'Rate', 'GST %', 'Supplier ID (auto)', 'Open Sets (auto)'],
   grn: ['GRN ID', 'GRN No', 'Purchase ID', 'Supplier', 'Supplier Invoice No', 'Invoice Date', 'Received Date', 'No. of cartons received',
-        'Received By', 'Status'],
+        'Received By', 'Status', 'Bill Amount', 'Tally Purchase Voucher No.'],
   grnLines: ['Line ID', 'GRN ID', 'Purchase Line ID', 'Item Code', 'Description', 'Supplier item code', 'Expected pcs / set',
              'Expected No. of Sets', 'Received pcs / set', 'Received No. of Sets', 'Damaged Qty', 'Stickered', 'Stickered Qty',
              'Put Away', 'Put Away By', 'Put_Qty', 'Location'],
   movement: ['Move ID', 'Ref ID', 'Moved At', 'Item Code', 'Qty', 'Location', 'Type', 'Moved By'],
   audit: ['Count ID', 'Counted At', 'Item Code', 'Description', 'Location', 'Counted Qty', 'Photo', 'Counted By', 'Status',
-          'Reviewed By', 'Reviewed On', 'System Qty (auto)', 'Variance (auto)']
+          'Reviewed By', 'Reviewed On', 'System Qty (auto)', 'Variance (auto)'],
+  payments: ['Payment ID', 'Payment Date', 'Direction', 'Ref Type', 'Ref ID', 'Amount', 'Mode', 'Reference No.', 'Entered By', 'Notes']
 };
 # ===== END OF Config =====
 
 ##############################################################################
-# FILE 2 of 16 :  Main    [Script file]   REPLACES your existing Main.gs (PW: lines are the additions)
+# FILE 2 of 25 :  Main    [Script file]   REPLACES your existing Main.gs (PW: lines are the additions)
 # first line of this file is:  /**
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -322,8 +347,8 @@ var Main = {
       'orders.pdf':           [OrdersApi.pdf, true],
       'orders.cancel':        [OrdersApi.cancel, true]
     };
-    // PW: Procurement and Warehouse actions (Procurement.gs, Warehouse.gs)
-    [ProcApi.routes(), WhApi.routes()].forEach(function (m) {
+    // PW: Procurement, Warehouse, Accounts and Admin actions (Procurement.gs, Warehouse.gs, Accounts.gs, Admin.gs)
+    [ProcApi.routes(), WhApi.routes(), AcctApi.routes(), AdminApi.routes()].forEach(function (m) {
       Object.keys(m).forEach(function (k) { all[k] = m[k]; });
     });
     return all;
@@ -338,7 +363,7 @@ var Main = {
   },
 
   // ---------- PW: departments ----------
-  /** Departments this role may open. Admin may open all three. */
+  /** Departments this role may open. Admin may open all of them. */
   allowedDepts: function (role) {
     return Object.keys(CONFIG.DEPARTMENTS).filter(function (k) {
       return role === 'Admin' || CONFIG.DEPARTMENTS[k].roles.indexOf(role) >= 0;
@@ -371,7 +396,9 @@ var Main = {
   boardOf: function (file) {
     return { LeadsBoard: 'leads', RequirementsBoard: 'requirements', QuoteBoard: 'quote', OrdersBoard: 'orders',
              ProcQueueBoard: 'requirements', PurchaseOrdersBoard: 'purchase', SuppliersBoard: 'suppliers',
-             ReceivingBoard: 'receiving', PutAwayBoard: 'putaway', DispatchBoard: 'dispatch', StockBoard: 'stock', AuditBoard: 'audit' }[file];
+             ReceivingBoard: 'receiving', PutAwayBoard: 'putaway', DispatchBoard: 'dispatch', StockBoard: 'stock', AuditBoard: 'audit',
+             OrderReceiptsBoard: 'orderpay', PurchaseReceiptsBoard: 'billpay', PaymentsBoard: 'payments',
+             OverviewBoard: 'overview', ProductsBoard: 'products', UsersBoard: 'users', LocationsBoard: 'locations' }[file];
   },
 
   boot: function (a, user) {
@@ -389,7 +416,8 @@ var Main = {
       pocDefault: poc,
       lists: {
         leadSources: CONFIG.LEAD_SOURCES, leadPocs: CONFIG.LEAD_POCS, leadStatuses: CONFIG.LEAD_STATUSES,
-        paymentTerms: CONFIG.PAYMENT_TERMS, deliveryTerms: CONFIG.DELIVERY_TERMS, lostReasons: CONFIG.LOST_REASONS
+        paymentTerms: CONFIG.PAYMENT_TERMS, deliveryTerms: CONFIG.DELIVERY_TERMS, lostReasons: CONFIG.LOST_REASONS,
+        paymentModes: CONFIG.PAYMENT_MODES
       }
     };
     // PW: the next quote number is only needed on the Sales screens (it reads the Quotations and Orders tabs)
@@ -455,8 +483,8 @@ function runDiagnostics() {
 # ===== END OF Main =====
 
 ##############################################################################
-# FILE 3 of 16 :  Items    [Script file]   NEW
-# first line of this file is:  /** Items.gs - the Products tab as a loo
+# FILE 3 of 25 :  Items    [Script file]   REPLACES Items.gs from the earlier version (adds the date-serial fix) - or NEW if you never added it
+# first line of this file is:  /** Items.gs - the Products tab as a lookup by item code, shared by Procurement and Warehouse. Quantities are in pieces. */
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
 /** Items.gs - the Products tab as a lookup by item code, shared by Procurement and Warehouse. Quantities are in pieces. */
@@ -582,6 +610,18 @@ var Rows = {
   },
   /** sets can be a fraction (a part-set); keep enough decimals that sets x pieces-per-set gives whole pieces back */
   sets: function (n) { return Math.round((Number(n) + 1e-12) * 1e8) / 1e8; },
+  /**
+   * A date for a TYPED date column (Requirements > Req Date, Sales Order Lines > Dispatch Date). The sheet refuses a number
+   * format on a typed column, and writing a Date object makes it try, so write the date as its serial number: the column
+   * shows it in its own date format. iso = 'yyyy-mm-dd'.
+   */
+  serial: function (iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(U.s(iso));
+    return m ? Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000) : '';
+  },
+  /** GRN Lines > Stickered is a Done / Left drop-down (older rows may hold TRUE / FALSE) */
+  stickerOut: function (on) { return on ? 'Done' : 'Left'; },
+  stickerIn: function (v) { return v === true || /^(done|true)$/i.test(U.s(v)); },
   byName: function (a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0; },
   matches: function (hay, q) {
     var toks = U.low(q).split(/\s+/).filter(Boolean), h = U.low(hay);
@@ -592,7 +632,7 @@ var Rows = {
 # ===== END OF Items =====
 
 ##############################################################################
-# FILE 4 of 16 :  Procurement    [Script file]   NEW
+# FILE 4 of 25 :  Procurement    [Script file]   REPLACES Procurement.gs from the earlier version (date-serial fix) - or NEW
 # first line of this file is:  /**
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -770,7 +810,7 @@ var ProcApi = {
     if (U.s(a.needBy)) { need = U.dateFromIso(a.needBy); if (!need) throw new Error('"Need by" date is not valid.'); }
     var id = U.newId(U.idSet(Db.readAll('requirements'), 'Req ID'));
     Db.append('requirements', [{
-      'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need,
+      'Req ID': id, 'Req Date': Rows.serial(U.isoToday()), 'Salesman': user.email, 'Need By': need,
       'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
     }]);
     return { id: id };
@@ -943,7 +983,7 @@ var ProcApi = {
           'Line ID': U.newId(taken), 'GRN ID': gid, 'Purchase Line ID': U.s(r['Line ID']), 'Item Code': code ? Items.raw(code) : '',
           'Description': U.s(r['Description']), 'Supplier item code': U.s(r['Supplier Item Code']),
           'Expected pcs / set': U.toNum(r['Pcs / Set']) >= 1 ? U.toNum(r['Pcs / Set']) : Items.pcs(code, 1),
-          'Expected No. of Sets': U.toNum(r['No. of Set']), 'Damaged Qty': 0, 'Stickered': false, 'Put Away': false
+          'Expected No. of Sets': U.toNum(r['No. of Set']), 'Damaged Qty': 0, 'Stickered': Rows.stickerOut(false), 'Put Away': false
         };
       }));
     }
@@ -1022,7 +1062,7 @@ var ProcApi = {
 # ===== END OF Procurement =====
 
 ##############################################################################
-# FILE 5 of 16 :  Warehouse    [Script file]   NEW
+# FILE 5 of 25 :  Warehouse    [Script file]   REPLACES Warehouse.gs from the earlier version (date-serial, Done/Left, "Audit adj." fixes) - or NEW
 # first line of this file is:  /**
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -1032,7 +1072,7 @@ var ProcApi = {
  * Stock Movement is the stock ledger and is ADD-ONLY. It is written in exactly three places:
  *   put-away      +pieces at a location  (type "Put-away", Ref ID = GRN line)
  *   dispatch      -pieces at the pick location (type "Dispatch", Ref ID = sales order line)
- *   audit adj     +/- variance when Accounts approves a count (type "Audit adj", Ref ID = count)
+ *   audit adj     +/- variance when Accounts approves a count (type "Audit adj.", Ref ID = count)
  * Quantities in the ledger, Damaged Qty, Put_Qty and Counted Qty are PIECES; order and GRN line quantities are SETS.
  *
  * Sales order flow (the sheet's own Stage (auto) formula): To pick -> To pack -> Book transport -> Ready to dispatch -> Dispatched.
@@ -1124,7 +1164,7 @@ var WhApi = {
       id: U.s(r['Line ID']), grnId: U.s(r['GRN ID']), purchaseLineId: U.s(r['Purchase Line ID']), itemCode: code, desc: U.s(r['Description']),
       name: p ? (p.name || code) : U.s(r['Description']), supItemCode: U.s(r['Supplier item code']), per: per,
       expSets: isNaN(expSets) ? 0 : expSets, recSets: rec, damaged: isNaN(dmg) ? 0 : dmg,
-      stickered: r['Stickered'] === true, stickeredQty: isNaN(sq) ? 0 : sq, putAway: r['Put Away'] === true, putQty: isNaN(pq) ? 0 : pq,
+      stickered: Rows.stickerIn(r['Stickered']), stickeredQty: isNaN(sq) ? 0 : sq, putAway: r['Put Away'] === true, putQty: isNaN(pq) ? 0 : pq,
       location: U.s(r['Location']), goodPcs: rec === '' ? 0 : Math.max(0, U.r4(rec * per - (isNaN(dmg) ? 0 : dmg))), unplanned: !U.s(r['Purchase Line ID']), row: r._row
     };
   },
@@ -1206,7 +1246,7 @@ var WhApi = {
       var sq = U.toNum(l.stickeredQty); if (isNaN(sq) || sq < 0) sq = 0;
       var obj = {
         'Received No. of Sets': sets === '' ? '' : Rows.sets(sets), 'Received pcs / set': per, 'Damaged Qty': U.r4(dmg),
-        'Stickered': l.stickered === true, 'Stickered Qty': l.stickered === true ? U.r4(sq) : 0
+        'Stickered': Rows.stickerOut(l.stickered === true), 'Stickered Qty': l.stickered === true ? U.r4(sq) : 0
       };
       if (!U.s(r['Item Code']) && U.s(l.itemCode)) {
         var raw = Items.raw(U.s(l.itemCode));
@@ -1245,7 +1285,7 @@ var WhApi = {
       Db.append('grnLines', fresh.map(function (l) {
         return {
           'Line ID': U.newId(taken), 'GRN ID': id, 'Item Code': l.code ? Items.raw(l.code) : '', 'Description': l.desc, 'Supplier item code': l.sup,
-          'Received pcs / set': l.per, 'Received No. of Sets': l.sets, 'Damaged Qty': l.dmg, 'Stickered': false, 'Put Away': false
+          'Received pcs / set': l.per, 'Received No. of Sets': l.sets, 'Damaged Qty': l.dmg, 'Stickered': Rows.stickerOut(false), 'Put Away': false
         };
       }));
     }
@@ -1296,7 +1336,7 @@ var WhApi = {
     var per = L.per, split = good - put > 1e-6;
     var upd = { 'Put Away': true, 'Put Away By': user.email, 'Put_Qty': U.r4(put), 'Location': loc };
     if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
-    if (a.stickered === true) upd['Stickered'] = true;
+    if (a.stickered === true) upd['Stickered'] = Rows.stickerOut(true);
     var newRow = 0;
     if (split) {
       upd['Received No. of Sets'] = Rows.sets((put + L.damaged) / per);        // the damaged pieces stay with the part that is put away
@@ -1305,7 +1345,7 @@ var WhApi = {
         'Line ID': U.newId(U.idSet(tbl, 'Line ID')), 'GRN ID': U.s(r['GRN ID']), 'Purchase Line ID': U.s(r['Purchase Line ID']), 'Item Code': Items.raw(code),
         'Description': U.s(r['Description']), 'Supplier item code': U.s(r['Supplier item code']), 'Expected pcs / set': r['Expected pcs / set'],
         'Received pcs / set': per, 'Received No. of Sets': Rows.sets((good - put) / per), 'Damaged Qty': 0,
-        'Stickered': L.stickered || a.stickered === true, 'Put Away': false
+        'Stickered': Rows.stickerOut(L.stickered || a.stickered === true), 'Put Away': false
       }])[0];
     }
     try {
@@ -1439,7 +1479,7 @@ var WhApi = {
       if (!WhApi.locSet_()[loc]) throw new Error('The location on this count is not in the Locations tab.');
       var sys = Ledger.at(Ledger.balances(), code, loc), counted = U.toNum(r['Counted Qty']), diff = U.r4((isNaN(counted) ? 0 : counted) - sys);
       if (!U.s(r['Item Code'])) upd['Item Code'] = Items.raw(code);
-      if (Math.abs(diff) > 1e-9) Ledger.add([{ code: code, loc: loc, qty: diff, type: 'Audit adj', ref: U.s(r['Count ID']) }], user);
+      if (Math.abs(diff) > 1e-9) Ledger.add([{ code: code, loc: loc, qty: diff, type: 'Audit adj.', ref: U.s(r['Count ID']) }], user);
       out.adjusted = diff; out.system = sys;
     }
     Db.update('audit', r._row, upd);
@@ -1577,7 +1617,7 @@ var WhApi = {
     var o = WhApi.order_(a.orderId), items = Items.map(), id = U.s(o['Order ID']);
     WhApi.mustBeOpen_(o);
     if (o['Transport Booked'] !== true) throw new Error('Book the transport first.');
-    var date = U.dateFromIso(U.s(a.date) || U.isoToday());
+    var dispIso = U.s(a.date) || U.isoToday(), date = U.dateFromIso(dispIso);
     if (!date) throw new Error('The dispatch date is not valid.');
     var allRows = Db.readAll('orderLines').filter(function (r) { return U.s(r['Order ID']) === id; }), mine = Rows.by(allRows, 'Line ID');
     var bal = Ledger.balances(), need = {}, plan = [], warnings = [];
@@ -1606,7 +1646,7 @@ var WhApi = {
     Ledger.add(entries, user);
     plan.forEach(function (p) {
       var total = U.r4(p.l.dispatchedSets + p.sets), full = total >= p.l.sets - 1e-9;
-      Db.update('orderLines', p.l.row, { 'Dispatched Qty': total, 'Dispatched': full, 'Dispatch Date': date, 'Dispatched By': user.email });
+      Db.update('orderLines', p.l.row, { 'Dispatched Qty': total, 'Dispatched': full, 'Dispatch Date': Rows.serial(dispIso), 'Dispatched By': user.email });
       p.l.dispatchedSets = total; p.l.open = full ? 0 : U.r4(p.l.sets - total); p.l.dispatched = full;
     });
     var left = allRows.some(function (r) {
@@ -1644,7 +1684,708 @@ var WhApi = {
 # ===== END OF Warehouse =====
 
 ##############################################################################
-# FILE 6 of 16 :  Index    [HTML file]   REPLACES your existing Index.html (one template for all three departments)
+# FILE 6 of 25 :  Accounts    [Script file]   NEW (Accounts department: order receipts, purchase receipts, payments)
+# first line of this file is:  /**
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+/**
+ * Accounts.gs - backend for the Accounts screens: order receipts (billing + money received), purchase receipts
+ * (supplier bills + money paid) and the payments ledger. Counts of stock are reviewed in the Audit tab (Warehouse.gs).
+ *
+ * Tables: Sales Orders (Tally Voucher No., Invoice Date, Due Date, Invoice Amount, Payment Cleared On), GRN (Bill Amount,
+ * Tally Purchase Voucher No.), Payments (one row per receipt or payment; a part payment is another row).
+ *
+ * Money rules:
+ *   - An order is worth "Invoice Amount" once billed, until then its value including GST (from the order lines).
+ *   - Received / Paid / Balance are worked out here from the Payments rows (the sheet's own (auto) columns are never written).
+ *   - Payments are added, never overwritten. A wrong entry is corrected in place (amount, date, mode, reference);
+ *     only an Admin can delete one.
+ *   - Typed date columns (Payment Date, Invoice Date, Due Date) are written as serial numbers: see Rows.serial in Items.gs.
+ */
+
+var AcctApi = {
+  routes: function () {
+    var A = ['Accounts'];
+    return {
+      'acc.counts':  [AcctApi.counts, false, A],
+      'ord.list':    [AcctApi.ordList, false, A],
+      'ord.get':     [AcctApi.ordGet, false, A],
+      'ord.bill':    [AcctApi.ordBill, true, A],
+      'bill.list':   [AcctApi.billList, false, A],
+      'bill.get':    [AcctApi.billGet, false, A],
+      'bill.save':   [AcctApi.billSave, true, A],
+      'pay.add':     [AcctApi.payAdd, true, A],
+      'pay.list':    [AcctApi.payList, false, A],
+      'pay.save':    [AcctApi.paySave, true, A],
+      'pay.delete':  [AcctApi.payDelete, true, []]        // Admin only
+    };
+  },
+
+  // ---------- small helpers ----------
+  /** a date cell -> 'yyyy-MM-dd' (also accepts a plain serial number, in case a date column was formatted as a number) */
+  iso_: function (v) {
+    if (typeof v === 'number' && v > 20000 && v < 80000) {
+      var d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
+      return d.getUTCFullYear() + '-' + U.pad(d.getUTCMonth() + 1) + '-' + U.pad(d.getUTCDate());
+    }
+    return U.iso(v);
+  },
+  /** 'yyyy-mm-dd' from the screen, checked. blank -> '' when optional */
+  date_: function (v, label, optional) {
+    var t = U.s(v);
+    if (!t) { if (optional) return ''; throw new Error('Enter the ' + label + '.'); }
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+    if (!m) throw new Error('The ' + label + ' is not a valid date.');
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    if (d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) throw new Error('The ' + label + ' is not a valid date.');
+    return t;
+  },
+  money_: function (v, label) {
+    var n = U.toNum(v);
+    if (isNaN(n) || !(n > 0)) throw new Error('Enter the ' + label + ' (more than 0).');
+    if (n > 1e9) throw new Error('The ' + label + ' looks too large.');
+    return U.r2(n);
+  },
+  num_: function (v) { var n = U.toNum(v); return isNaN(n) ? 0 : n; },
+  addMonthsIso_: function (iso, n) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    if (!m) return '';
+    var y = +m[1], mo = +m[2] - 1 + n, day = +m[3];
+    var last = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate(), d = new Date(Date.UTC(y, mo, Math.min(day, last)));
+    return d.getUTCFullYear() + '-' + U.pad(d.getUTCMonth() + 1) + '-' + U.pad(d.getUTCDate());
+  },
+  /** When is money due, going by the payment terms ("30 days credit", "3 months credit period", "100% advance", "After delivery")? */
+  dueFrom_: function (terms, iso) {
+    var t = U.low(terms), m = /(\d+)\s*(day|month)/.exec(t);
+    if (!iso) return '';
+    if (/credit/.test(t) && m) return m[2] === 'month' ? AcctApi.addMonthsIso_(iso, +m[1]) : U.addDaysIso(iso, +m[1]);
+    if (/advance|after delivery|cash/.test(t)) return iso;
+    return '';
+  },
+  /** Payments grouped by what they were for: { 'Order|id': { sum (signed, in the natural direction), last (iso), rows } } */
+  payIndex_: function () {
+    var idx = {};
+    Db.readAll('payments').forEach(function (r) {
+      var type = U.s(r['Ref Type']), id = U.s(r['Ref ID']), dir = U.s(r['Direction']), amt = U.toNum(r['Amount']);
+      if (!type || !id || isNaN(amt)) return;
+      var natural = type === 'Order' ? 'Received' : 'Paid', k = type + '|' + id;
+      var e = idx[k] || (idx[k] = { sum: 0, last: '', rows: [] }), date = AcctApi.iso_(r['Payment Date']);
+      e.sum = U.r2(e.sum + (dir === natural ? amt : -amt));
+      if (date > e.last) e.last = date;
+      e.rows.push(r);
+    });
+    return idx;
+  },
+  payOut_: function (r, refNo, party) {
+    var type = U.s(r['Ref Type']);
+    return {
+      id: U.s(r['Payment ID']), date: AcctApi.iso_(r['Payment Date']), direction: U.s(r['Direction']), refType: type, refId: U.s(r['Ref ID']),
+      refNo: refNo || '', party: party || '', amount: U.r2(AcctApi.num_(r['Amount'])), mode: U.s(r['Mode']), referenceNo: U.s(r['Reference No.']),
+      by: U.s(r['Entered By']), notes: U.s(r['Notes']), row: r._row
+    };
+  },
+
+  // ---------- order receipts ----------
+  /** every order with its money worked out */
+  orders_: function () {
+    var today = U.isoToday(), pays = AcctApi.payIndex_(), lines = Rows.group(Db.readAll('orderLines'), 'Order ID');
+    var cust = {};
+    Db.readCols('customers', ['Customer ID', 'Company/Brand Name']).forEach(function (c) { cust[U.s(c['Customer ID'])] = U.s(c['Company/Brand Name']); });
+    return Db.readAll('orders').map(function (o) {
+      var id = U.s(o['Order ID']), ls = lines[id] || [], calc = 0;
+      ls.forEach(function (l) {
+        var pcs = U.toNum(l['Pcs / Set']), sets = U.toNum(l['No. of set']), price = U.toNum(l['Offer Price']), g = U.frac(l['GST %']);
+        if (!(pcs >= 1)) pcs = 1;
+        if (!isNaN(sets) && !isNaN(price)) calc += pcs * sets * price * (1 + (isNaN(g) ? 0 : g));
+      });
+      var auto = U.toNum(o['Value incl. GST (auto)']), value = U.r2(!isNaN(auto) && auto > 0 ? auto : calc);
+      var inv = U.toNum(o['Invoice Amount']), invoiced = !isNaN(inv) && inv > 0, status = U.s(o['Status']);
+      var p = pays['Order|' + id] || { sum: 0, last: '', rows: [] };
+      var basis = invoiced ? U.r2(inv) : value, received = p.sum, balance = U.r2(basis - received);
+      var invDate = AcctApi.iso_(o['Invoice Date']), terms = U.s(o['Payment Terms']);
+      var due = AcctApi.iso_(o['Due Date']) || (invoiced ? AcctApi.dueFrom_(terms, invDate) : '');
+      var state;
+      if (status === 'Cancelled') state = 'Cancelled';
+      else if (!invoiced) state = 'To invoice';
+      else if (balance <= 0.5) state = 'Paid';
+      else state = due && due < today ? 'Overdue' : 'Awaiting payment';
+      var stage = U.s(o['Stage (auto)']);
+      return {
+        id: id, no: U.s(o['Order No.']), date: AcctApi.iso_(o['Order Date']), customerId: U.s(o['Customer']),
+        customer: U.s(o['Customer (auto)']) || cust[U.s(o['Customer'])] || U.s(o['Customer']), salesman: U.s(o['Salesman']), status: status, stage: stage,
+        dispatched: status === 'Dispatched' || stage === 'Dispatched', terms: terms, lines: ls.length,
+        value: value, invoiced: invoiced, invoiceAmount: invoiced ? U.r2(inv) : null, voucher: U.s(o['Tally Voucher No.']),
+        invoiceDate: invDate, due: due, clearedOn: AcctApi.iso_(o['Payment Cleared On']),
+        received: received, balance: balance, lastPaid: p.last, payments: p.rows.length, state: state,
+        overdueDays: state === 'Overdue' ? Math.max(0, Math.round((Date.parse(today + 'T00:00:00Z') - Date.parse(due + 'T00:00:00Z')) / 86400000)) : 0,
+        refundDue: status === 'Cancelled' && received > 0.5, row: o._row
+      };
+    });
+  },
+
+  /** args: { filter: 'To invoice' | 'To collect' | 'Paid' | 'All', search } */
+  ordList: function (a) {
+    var all = AcctApi.orders_(), f = U.s(a.filter) || 'To invoice', q = U.s(a.search), today = U.isoToday(), month = today.slice(0, 7);
+    var counts = { toInvoice: 0, toCollect: 0, paid: 0 }, sum = { toInvoiceValue: 0, outstanding: 0, overdue: 0, overdueCount: 0, receivedMonth: 0 };
+    all.forEach(function (o) {
+      if (o.state === 'To invoice' && o.value > 0) { counts.toInvoice++; sum.toInvoiceValue += o.value; }
+      else if (o.state === 'Awaiting payment' || o.state === 'Overdue') { counts.toCollect++; sum.outstanding += o.balance; }
+      else if (o.state === 'Paid') counts.paid++;
+      if (o.state === 'Overdue') { sum.overdue += o.balance; sum.overdueCount++; }
+    });
+    Db.readAll('payments').forEach(function (r) {
+      if (U.s(r['Ref Type']) === 'Order' && U.s(r['Direction']) === 'Received' && AcctApi.iso_(r['Payment Date']).slice(0, 7) === month) sum.receivedMonth += AcctApi.num_(r['Amount']);
+    });
+    Object.keys(sum).forEach(function (k) { sum[k] = U.r2(sum[k]); });
+    var rows = all.filter(function (o) {
+      if (f === 'To invoice' && !(o.state === 'To invoice' && o.value > 0)) return false;
+      if (f === 'To collect' && o.state !== 'Awaiting payment' && o.state !== 'Overdue') return false;
+      if (f === 'Paid' && o.state !== 'Paid') return false;
+      return !q || Rows.matches([o.no, o.customer, o.voucher, o.state, o.terms, o.stage].join(' '), q);
+    });
+    rows.sort(function (x, y) {
+      if (f === 'To invoice') { if (x.dispatched !== y.dispatched) return x.dispatched ? -1 : 1; return x.date < y.date ? -1 : x.date > y.date ? 1 : 0; }
+      if (f === 'To collect') { if ((x.state === 'Overdue') !== (y.state === 'Overdue')) return x.state === 'Overdue' ? -1 : 1; var dx = x.due || '9999', dy = y.due || '9999'; return dx < dy ? -1 : dx > dy ? 1 : 0; }
+      return x.no < y.no ? 1 : x.no > y.no ? -1 : 0;
+    });
+    return { shown: rows.length, rows: rows.slice(0, CONFIG.MAX_ROWS), counts: counts, sum: sum };
+  },
+
+  /** args: { id } - the order, its lines and its payments */
+  ordGet: function (a) {
+    var o = AcctApi.orders_().filter(function (x) { return x.id === U.s(a.id); })[0];
+    if (!o) throw new Error('That order was not found.');
+    var items = Items.map();
+    var lines = Db.readAll('orderLines').filter(function (r) { return U.s(r['Order ID']) === o.id; }).map(function (r) {
+      var code = U.s(r['Item_Code']), p = code ? items[code] : null, pcs = U.toNum(r['Pcs / Set']), sets = U.toNum(r['No. of set']), price = U.toNum(r['Offer Price']), g = U.frac(r['GST %']);
+      if (!(pcs >= 1)) pcs = p ? p.pcs : 1;
+      sets = isNaN(sets) ? 0 : sets; price = isNaN(price) ? 0 : price; g = isNaN(g) ? 0 : g;
+      return { id: U.s(r['Line ID']), itemCode: code, name: p ? (p.name || code) : U.s(r['Description']), pcs: pcs, sets: sets, price: price, gst: g,
+               amount: U.r2(pcs * sets * price * (1 + g)) };
+    });
+    var pays = Db.readAll('payments').filter(function (r) { return U.s(r['Ref Type']) === 'Order' && U.s(r['Ref ID']) === o.id; })
+      .map(function (r) { return AcctApi.payOut_(r, o.no, o.customer); }).sort(function (x, y) { return x.row - y.row; });
+    o.suggestedDue = AcctApi.dueFrom_(o.terms, o.invoiceDate || U.isoToday());
+    o.lineList = lines; o.paymentList = pays;
+    return o;
+  },
+
+  /**
+   * Billing, after the invoice is made in Tally. args: { id, voucherNo, invoiceDate, invoiceAmount, dueDate? }
+   * Sets Status to "Billing done" unless the order is already dispatched or cancelled.
+   */
+  ordBill: function (a) {
+    var o = AcctApi.orders_().filter(function (x) { return x.id === U.s(a.id); })[0];
+    if (!o) throw new Error('That order was not found.');
+    if (o.status === 'Cancelled') throw new Error('This order is cancelled.');
+    var voucher = U.s(a.voucherNo);
+    if (!voucher) throw new Error('Enter the Tally voucher number.');
+    var amount = AcctApi.money_(a.invoiceAmount, 'invoice amount'), invDate = AcctApi.date_(a.invoiceDate, 'invoice date');
+    if (invDate > U.isoToday()) throw new Error('The invoice date cannot be in the future.');
+    var due = AcctApi.date_(a.dueDate, 'due date', true);
+    if (due && due < invDate) throw new Error('The due date cannot be before the invoice date.');
+    var upd = { 'Tally Voucher No.': voucher, 'Invoice Date': Rows.serial(invDate), 'Invoice Amount': amount, 'Due Date': due ? Rows.serial(due) : '' };
+    if (o.status !== 'Dispatched') upd['Status'] = 'Billing done';
+    Db.update('orders', o.row, upd, { 'Tally Voucher No.': '@' });
+    AcctApi.syncCleared_(o.id);
+    return { id: o.id, balance: U.r2(amount - o.received) };
+  },
+
+  /** Keep "Payment Cleared On" right: the date of the last payment once the invoice is fully paid, blank otherwise. */
+  syncCleared_: function (orderId) {
+    var o = AcctApi.orders_().filter(function (x) { return x.id === orderId; })[0];
+    if (!o) return;
+    var want = o.invoiced && o.balance <= 0.5 && o.received > 0 ? o.lastPaid : '';
+    if (want === o.clearedOn) return;
+    Db.update('orders', o.row, { 'Payment Cleared On': want ? U.dateFromIso(want) : '' });
+  },
+
+  // ---------- purchase receipts (supplier bills) ----------
+  bills_: function () {
+    var today = U.isoToday(), pays = AcctApi.payIndex_(), sups = ProcApi.suppliers_();
+    var allPl = Db.readAll('purchaseLines');
+    var pos = Rows.by(Db.readAll('purchase'), 'Purchase ID'), pLines = Rows.by(allPl, 'Line ID'), poLines = Rows.group(allPl, 'Purchase ID');
+    var gLines = Rows.group(Db.readAll('grnLines'), 'GRN ID');
+    return Db.readAll('grn').map(function (g) {
+      var id = U.s(g['GRN ID']), po = pos[U.s(g['Purchase ID'])], sid = U.s(g['Supplier']) || (po ? U.s(po['Supplier Company Name']) : '');
+      var poValue = 0, recValue = 0, damaged = 0;
+      (po ? (poLines[U.s(po['Purchase ID'])] || []) : []).forEach(function (l) {
+        var pcs = U.toNum(l['Pcs / Set']), sets = U.toNum(l['No. of Set']), rate = U.toNum(l['Rate']), gs = U.frac(l['GST %']);
+        if (!(pcs >= 1)) pcs = 1;
+        if (!isNaN(sets) && !isNaN(rate)) poValue += pcs * sets * rate * (1 + (isNaN(gs) ? 0 : gs));
+      });
+      (gLines[id] || []).forEach(function (l) {
+        var pl = pLines[U.s(l['Purchase Line ID'])], rec = U.toNum(l['Received No. of Sets']), per = U.toNum(l['Received pcs / set']), dm = U.toNum(l['Damaged Qty']);
+        if (!(per >= 1)) per = U.toNum(l['Expected pcs / set']);
+        if (!(per >= 1)) per = 1;
+        if (!isNaN(dm)) damaged += dm;
+        if (pl && !isNaN(rec)) {
+          var rate = U.toNum(pl['Rate']), gs = U.frac(pl['GST %']);
+          if (!isNaN(rate)) recValue += rec * per * rate * (1 + (isNaN(gs) ? 0 : gs));
+        }
+      });
+      var bill = U.toNum(g['Bill Amount']), billed = !isNaN(bill) && bill > 0, p = pays['GRN|' + id] || { sum: 0, last: '', rows: [] };
+      var received = U.s(g['Status']) === 'Received' || U.s(g['Received Date']) !== '';
+      var paid = p.sum, balance = billed ? U.r2(bill - paid) : null, terms = po ? U.s(po['Payment Terms']) : '';
+      var invDate = AcctApi.iso_(g['Invoice Date']), recDate = AcctApi.iso_(g['Received Date']);
+      var due = billed ? AcctApi.dueFrom_(terms, invDate || recDate) : '';
+      var state;
+      if (!received && !billed) state = 'Not received';
+      else if (!billed) state = 'To bill';
+      else if (balance <= 0.5) state = 'Paid';
+      else state = due && due < today ? 'Overdue' : 'To pay';
+      return {
+        id: id, no: U.s(g['GRN No']), purchaseId: U.s(g['Purchase ID']), poNo: po ? U.s(po['Purchase No']) : '', supplierId: sid,
+        supplier: sups.by[sid] ? sups.by[sid].name : '', terms: terms, received: received, receivedDate: recDate,
+        invoiceNo: U.s(g['Supplier Invoice No']), invoiceDate: invDate, billAmount: billed ? U.r2(bill) : null, voucher: U.s(g['Tally Purchase Voucher No.']),
+        poValue: U.r2(poValue), recValue: U.r2(recValue), damaged: U.r4(damaged), paid: paid, balance: balance, due: due, lastPaid: p.last, payments: p.rows.length,
+        state: state, overdueDays: state === 'Overdue' ? Math.max(0, Math.round((Date.parse(today + 'T00:00:00Z') - Date.parse(due + 'T00:00:00Z')) / 86400000)) : 0, row: g._row
+      };
+    });
+  },
+
+  /** args: { filter: 'To bill' | 'To pay' | 'Paid' | 'Not received' | 'All', search } */
+  billList: function (a) {
+    var all = AcctApi.bills_(), f = U.s(a.filter) || 'To bill', q = U.s(a.search), month = U.isoToday().slice(0, 7);
+    var counts = { toBill: 0, toPay: 0, paid: 0, notReceived: 0 }, sum = { payable: 0, overdue: 0, overdueCount: 0, paidMonth: 0 };
+    all.forEach(function (b) {
+      if (b.state === 'To bill') counts.toBill++;
+      else if (b.state === 'To pay' || b.state === 'Overdue') { counts.toPay++; sum.payable += b.balance; }
+      else if (b.state === 'Paid') counts.paid++;
+      else counts.notReceived++;
+      if (b.state === 'Overdue') { sum.overdue += b.balance; sum.overdueCount++; }
+    });
+    Db.readAll('payments').forEach(function (r) {
+      if (U.s(r['Ref Type']) === 'GRN' && U.s(r['Direction']) === 'Paid' && AcctApi.iso_(r['Payment Date']).slice(0, 7) === month) sum.paidMonth += AcctApi.num_(r['Amount']);
+    });
+    Object.keys(sum).forEach(function (k) { sum[k] = U.r2(sum[k]); });
+    var rows = all.filter(function (b) {
+      if (f === 'To bill' && b.state !== 'To bill') return false;
+      if (f === 'To pay' && b.state !== 'To pay' && b.state !== 'Overdue') return false;
+      if (f === 'Paid' && b.state !== 'Paid') return false;
+      if (f === 'Not received' && b.state !== 'Not received') return false;
+      return !q || Rows.matches([b.no, b.poNo, b.supplier, b.invoiceNo, b.voucher, b.state].join(' '), q);
+    });
+    rows.sort(function (x, y) {
+      if (f === 'To pay') { if ((x.state === 'Overdue') !== (y.state === 'Overdue')) return x.state === 'Overdue' ? -1 : 1; var dx = x.due || '9999', dy = y.due || '9999'; return dx < dy ? -1 : dx > dy ? 1 : 0; }
+      return x.no < y.no ? 1 : x.no > y.no ? -1 : 0;
+    });
+    return { shown: rows.length, rows: rows.slice(0, CONFIG.MAX_ROWS), counts: counts, sum: sum };
+  },
+
+  /** args: { id } - one delivery with its lines and payments */
+  billGet: function (a) {
+    var b = AcctApi.bills_().filter(function (x) { return x.id === U.s(a.id); })[0];
+    if (!b) throw new Error('That delivery was not found.');
+    var items = Items.map(), pLines = Rows.by(Db.readAll('purchaseLines'), 'Line ID');
+    b.lineList = Db.readAll('grnLines').filter(function (r) { return U.s(r['GRN ID']) === b.id; }).map(function (r) {
+      var code = U.s(r['Item Code']), p = code ? items[code] : null, pl = pLines[U.s(r['Purchase Line ID'])];
+      var per = U.toNum(r['Received pcs / set']); if (!(per >= 1)) per = U.toNum(r['Expected pcs / set']); if (!(per >= 1)) per = p ? p.pcs : 1;
+      var rec = U.toNum(r['Received No. of Sets']), exp = U.toNum(r['Expected No. of Sets']), rate = pl ? U.toNum(pl['Rate']) : NaN, gs = pl ? U.frac(pl['GST %']) : NaN;
+      rec = isNaN(rec) ? null : rec; rate = isNaN(rate) ? 0 : rate; gs = isNaN(gs) ? 0 : gs;
+      return { id: U.s(r['Line ID']), itemCode: code, name: p ? (p.name || code) : U.s(r['Description']), per: per, expSets: isNaN(exp) ? 0 : exp, recSets: rec,
+               damaged: U.r4(AcctApi.num_(r['Damaged Qty'])), rate: rate, gst: gs, amount: rec === null ? 0 : U.r2(rec * per * rate * (1 + gs)) };
+    });
+    b.paymentList = Db.readAll('payments').filter(function (r) { return U.s(r['Ref Type']) === 'GRN' && U.s(r['Ref ID']) === b.id; })
+      .map(function (r) { return AcctApi.payOut_(r, b.no, b.supplier); }).sort(function (x, y) { return x.row - y.row; });
+    return b;
+  },
+
+  /** The supplier's bill. args: { id, billAmount, voucherNo, invoiceNo?, invoiceDate? } */
+  billSave: function (a) {
+    var b = AcctApi.bills_().filter(function (x) { return x.id === U.s(a.id); })[0];
+    if (!b) throw new Error('That delivery was not found.');
+    var amount = AcctApi.money_(a.billAmount, 'bill amount'), voucher = U.s(a.voucherNo);
+    if (!voucher) throw new Error('Enter the Tally purchase voucher number.');
+    var upd = { 'Bill Amount': amount, 'Tally Purchase Voucher No.': voucher };
+    if (U.s(a.invoiceNo)) upd['Supplier Invoice No'] = U.s(a.invoiceNo);
+    if (U.s(a.invoiceDate)) upd['Invoice Date'] = U.dateFromIso(AcctApi.date_(a.invoiceDate, 'supplier invoice date'));
+    Db.update('grn', b.row, upd, { 'Tally Purchase Voucher No.': '@' });
+    return { id: b.id, balance: U.r2(amount - b.paid) };
+  },
+
+  // ---------- payments ----------
+  /**
+   * Record money. args: { kind: 'Order' | 'GRN', refId, date, amount, mode, referenceNo, notes, refund?, confirmOver? }
+   * An order receipt is "Received", a purchase payment is "Paid"; refund = the other way round.
+   */
+  payAdd: function (a, user) {
+    var kind = U.s(a.kind), refId = U.s(a.refId), ref, label;
+    if (kind === 'Order') {
+      ref = AcctApi.orders_().filter(function (x) { return x.id === refId; })[0];
+      if (!ref) throw new Error('That order was not found.');
+      label = ref.no;
+    } else if (kind === 'GRN') {
+      ref = AcctApi.bills_().filter(function (x) { return x.id === refId; })[0];
+      if (!ref) throw new Error('That delivery was not found.');
+      label = ref.no;
+    } else throw new Error('A payment must be for an order or a delivery.');
+    var refund = a.refund === true, natural = kind === 'Order' ? 'Received' : 'Paid', dir = refund ? (natural === 'Received' ? 'Paid' : 'Received') : natural;
+    var amount = AcctApi.money_(a.amount, 'amount'), date = AcctApi.date_(a.date, 'payment date'), mode = U.s(a.mode), refNo = U.s(a.referenceNo);
+    if (date > U.isoToday()) throw new Error('The payment date cannot be in the future.');
+    if (CONFIG.PAYMENT_MODES.indexOf(mode) < 0) throw new Error('Pick how it was paid: ' + CONFIG.PAYMENT_MODES.join(', ') + '.');
+    if (kind === 'Order' && ref.status === 'Cancelled' && !refund) throw new Error(label + ' is cancelled: only a refund can be recorded.');
+    var basis = kind === 'Order' ? (ref.invoiced ? ref.invoiceAmount : ref.value) : ref.billAmount;
+    if (!refund && basis && amount > U.r2(basis - (kind === 'Order' ? ref.received : ref.paid)) + 0.5 && a.confirmOver !== true) {
+      throw new Error('That is more than the balance (Rs ' + U.inr(Math.max(0, basis - (kind === 'Order' ? ref.received : ref.paid)), 2) + ') on ' + label + '.');
+    }
+    var rows = Db.readAll('payments');
+    if (refNo) rows.forEach(function (r) {
+      if (U.s(r['Ref Type']) === kind && U.s(r['Ref ID']) === refId && U.s(r['Reference No.']) === refNo && Math.abs(AcctApi.num_(r['Amount']) - amount) < 0.005 && AcctApi.iso_(r['Payment Date']) === date)
+        throw new Error('This payment (same reference, amount and date) is already recorded on ' + label + '.');
+    });
+    var id = U.newId(U.idSet(rows, 'Payment ID'));
+    Db.append('payments', [{
+      'Payment ID': id, 'Payment Date': Rows.serial(date), 'Direction': dir, 'Ref Type': kind, 'Ref ID': refId, 'Amount': amount,
+      'Mode': mode, 'Reference No.': refNo, 'Entered By': user.email, 'Notes': U.s(a.notes)
+    }], { 'Reference No.': '@' });
+    if (kind === 'Order') AcctApi.syncCleared_(refId);
+    return { id: id };
+  },
+
+  /** args: { direction: 'All' | 'Received' | 'Paid', from?, to?, search } */
+  payList: function (a) {
+    var f = U.s(a.direction) || 'All', q = U.s(a.search), from = AcctApi.date_(a.from, 'from date', true), to = AcctApi.date_(a.to, 'to date', true);
+    var ords = {}, grns = {};
+    AcctApi.orders_().forEach(function (o) { ords[o.id] = o; });
+    AcctApi.bills_().forEach(function (b) { grns[b.id] = b; });
+    var rec = 0, paid = 0, rows = [];
+    Db.readAll('payments').forEach(function (r) {
+      var type = U.s(r['Ref Type']), id = U.s(r['Ref ID']), ref = type === 'Order' ? ords[id] : grns[id];
+      var p = AcctApi.payOut_(r, ref ? ref.no : '', ref ? (type === 'Order' ? ref.customer : ref.supplier) : '');
+      if (f !== 'All' && p.direction !== f) return;
+      if (from && p.date < from) return;
+      if (to && p.date > to) return;
+      if (q && !Rows.matches([p.refNo, p.party, p.mode, p.referenceNo, p.notes, p.by, p.id].join(' '), q)) return;
+      if (p.direction === 'Received') rec += p.amount; else if (p.direction === 'Paid') paid += p.amount;
+      rows.push(p);
+    });
+    rows.sort(function (x, y) { return x.date < y.date ? 1 : x.date > y.date ? -1 : y.row - x.row; });
+    return { shown: rows.length, rows: rows.slice(0, CONFIG.MAX_ROWS), totals: { received: U.r2(rec), paid: U.r2(paid), net: U.r2(rec - paid) }, modes: CONFIG.PAYMENT_MODES };
+  },
+
+  /** Correct a payment in place. args: { id, date, amount, mode, referenceNo, notes } (what it was for cannot change) */
+  paySave: function (a) {
+    var r = Rows.by(Db.readAll('payments'), 'Payment ID')[U.s(a.id)];
+    if (!r) throw new Error('That payment was not found.');
+    var amount = AcctApi.money_(a.amount, 'amount'), date = AcctApi.date_(a.date, 'payment date'), mode = U.s(a.mode);
+    if (date > U.isoToday()) throw new Error('The payment date cannot be in the future.');
+    if (CONFIG.PAYMENT_MODES.indexOf(mode) < 0) throw new Error('Pick how it was paid: ' + CONFIG.PAYMENT_MODES.join(', ') + '.');
+    Db.update('payments', r._row, { 'Payment Date': Rows.serial(date), 'Amount': amount, 'Mode': mode, 'Reference No.': U.s(a.referenceNo), 'Notes': U.s(a.notes) }, { 'Reference No.': '@' });
+    if (U.s(r['Ref Type']) === 'Order') AcctApi.syncCleared_(U.s(r['Ref ID']));
+    return { id: U.s(a.id) };
+  },
+
+  /** Admin only. args: { id } */
+  payDelete: function (a) {
+    var r = Rows.by(Db.readAll('payments'), 'Payment ID')[U.s(a.id)];
+    if (!r) throw new Error('That payment was not found.');
+    var type = U.s(r['Ref Type']), ref = U.s(r['Ref ID']);
+    Rows.wipe('payments', r._row);
+    if (type === 'Order') AcctApi.syncCleared_(ref);
+    return { id: U.s(a.id) };
+  },
+
+  // ---------- numbers for the tab badges ----------
+  counts: function () {
+    var today = U.isoToday(), toInvoice = 0, overdue = 0, toBill = 0, payOverdue = 0;
+    AcctApi.orders_().forEach(function (o) { if (o.state === 'To invoice' && o.value > 0) toInvoice++; if (o.state === 'Overdue') overdue++; });
+    AcctApi.bills_().forEach(function (b) { if (b.state === 'To bill') toBill++; if (b.state === 'Overdue') payOverdue++; });
+    var audit = 0;
+    Db.readAll('audit').forEach(function (r) { if ((U.s(r['Status']) || 'Pending') === 'Pending') audit++; });
+    return { toInvoice: toInvoice, overdue: overdue, toBill: toBill, payOverdue: payOverdue, audit: audit, today: today };
+  }
+};
+# ===== END OF Accounts =====
+
+##############################################################################
+# FILE 7 of 25 :  Admin    [Script file]   NEW (Admin department: overview, users, products, locations)
+# first line of this file is:  /**
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+/**
+ * Admin.gs - backend for the Admin screens: overview (what needs attention in every department), users, product master data,
+ * storage locations and a sheet check. Everything here is Admin only.
+ *
+ * Tables: Users (Email, Name, Role), Locations, Products (attributes; the (auto) stock columns are formulas and are never written).
+ * Safety rules for Users: you cannot remove or demote yourself, and there is always at least one Admin.
+ */
+
+var AdminApi = {
+  routes: function () {
+    var N = [];       // no role listed = only Admin passes the check in Main.api
+    return {
+      'adm.overview': [AdminApi.overview, false, N],
+      'adm.check':    [AdminApi.check, false, N],
+      'usr.list':     [AdminApi.usrList, false, N],
+      'usr.save':     [AdminApi.usrSave, true, N],
+      'usr.delete':   [AdminApi.usrDelete, true, N],
+      'loc.admin':    [AdminApi.locAdmin, false, N],
+      'loc.save':     [AdminApi.locSave, true, N],
+      'prd.list':     [AdminApi.prdList, false, N],
+      'prd.save':     [AdminApi.prdSave, true, N],
+      'prd.verify':   [AdminApi.prdVerify, true, N]
+    };
+  },
+
+  // ---------- small helpers ----------
+  /** "2026-10-12" -> "12 Oct 2026" for the sentences the overview builds on the server */
+  fmt_: function (iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''), mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return m ? (+m[3]) + ' ' + mon[+m[2] - 1] + ' ' + m[1] : '';
+  },
+  qty_: function (n) { n = Number(n); return isFinite(n) ? String(Math.round(n * 10000) / 10000) : ''; },
+
+  // ---------- users ----------
+  deptsOf_: function (role) {
+    return Main.allowedDepts(role).map(function (k) { return CONFIG.DEPARTMENTS[k].label; });
+  },
+  usrList: function (a, user) {
+    var rows = Db.readAll('users').map(function (r) {
+      var email = U.low(r['Email']), role = U.s(r['Role']);
+      return { email: email, name: U.s(r['Name']), role: role, valid: CONFIG.ALLOWED_ROLES.indexOf(role) >= 0, depts: CONFIG.ALLOWED_ROLES.indexOf(role) >= 0 ? AdminApi.deptsOf_(role) : [], you: email === user.email, row: r._row };
+    });
+    var order = CONFIG.ALLOWED_ROLES, counts = {};
+    CONFIG.ALLOWED_ROLES.forEach(function (r) { counts[r] = 0; });
+    rows.forEach(function (u) { if (counts[u.role] !== undefined) counts[u.role]++; });
+    rows.sort(function (x, y) {
+      var ix = order.indexOf(x.role), iy = order.indexOf(y.role);
+      if (ix !== iy) return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy);
+      return x.name.toLowerCase() < y.name.toLowerCase() ? -1 : x.name.toLowerCase() > y.name.toLowerCase() ? 1 : 0;
+    });
+    return { rows: rows, roles: CONFIG.ALLOWED_ROLES, counts: counts };
+  },
+  adminCount_: function (rows, exceptEmail) {
+    var n = 0;
+    rows.forEach(function (r) { if (U.s(r['Role']) === 'Admin' && U.low(r['Email']) !== exceptEmail) n++; });
+    return n;
+  },
+  /** args: { originalEmail? (when editing), email, name, role } */
+  usrSave: function (a, user) {
+    var email = U.low(a.email), name = U.s(a.name).replace(/\s+/g, ' '), role = U.s(a.role), orig = U.low(a.originalEmail);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Enter a valid Google email address.');
+    if (!name) throw new Error('Enter the person\'s name.');
+    if (CONFIG.ALLOWED_ROLES.indexOf(role) < 0) throw new Error('Pick a role: ' + CONFIG.ALLOWED_ROLES.join(', ') + '.');
+    var rows = Db.readAll('users'), mine = null;
+    rows.forEach(function (r) { if (orig && U.low(r['Email']) === orig) mine = r; });
+    rows.forEach(function (r) {
+      if (U.low(r['Email']) === email && (!mine || r._row !== mine._row)) throw new Error(email + ' is already in the list.');
+    });
+    if (orig && !mine) throw new Error('That user no longer exists.');
+    if (mine) {
+      if (orig === user.email && email !== user.email) throw new Error('You cannot change your own email address here.');
+      if (orig === user.email && role !== 'Admin') throw new Error('You cannot take the Admin role away from yourself. Ask another Admin.');
+      if (U.s(mine['Role']) === 'Admin' && role !== 'Admin' && AdminApi.adminCount_(rows, orig) < 1) throw new Error('There must always be at least one Admin.');
+      Db.update('users', mine._row, { 'Email': email, 'Name': name, 'Role': role });
+      return { email: email };
+    }
+    Db.append('users', [{ 'Email': email, 'Name': name, 'Role': role }]);
+    return { email: email };
+  },
+  /** args: { email } */
+  usrDelete: function (a, user) {
+    var email = U.low(a.email), rows = Db.readAll('users'), mine = null;
+    rows.forEach(function (r) { if (U.low(r['Email']) === email) mine = r; });
+    if (!mine) throw new Error('That user no longer exists.');
+    if (email === user.email) throw new Error('You cannot remove yourself.');
+    if (U.s(mine['Role']) === 'Admin' && AdminApi.adminCount_(rows, email) < 1) throw new Error('There must always be at least one Admin.');
+    Rows.wipe('users', mine._row);
+    return { email: email };
+  },
+
+  // ---------- locations ----------
+  locAdmin: function () {
+    var bal = Ledger.balances(), pcs = {}, items = {};
+    Object.keys(bal).forEach(function (k) {
+      var i = k.indexOf('|'), loc = k.slice(i + 1);
+      if (bal[k] > 1e-9) { pcs[loc] = U.r4((pcs[loc] || 0) + bal[k]); items[loc] = (items[loc] || 0) + 1; }
+    });
+    var rows = Db.readAll('locations').filter(function (r) { return U.s(r['Location Code']); }).map(function (r) {
+      var c = U.s(r['Location Code']);
+      return { code: c, floor: U.s(r['Floor']), zone: U.s(r['Zone']), shelf: U.s(r['Shelf']), desc: U.s(r['Description']), pcs: pcs[c] || 0, items: items[c] || 0 };
+    });
+    rows.sort(function (x, y) { return x.code < y.code ? -1 : x.code > y.code ? 1 : 0; });
+    return rows;
+  },
+  /** args: { code, floor, zone, shelf, desc, isNew }. A code never changes once it exists: stock and orders refer to it. */
+  locSave: function (a) {
+    var code = U.s(a.code).toUpperCase().replace(/\s+/g, '');
+    if (!/^[A-Z0-9][A-Z0-9._-]{0,29}$/.test(code)) throw new Error('A location code uses letters, digits, - . _ only (for example FL2-ZB-S2).');
+    var rows = Db.readAll('locations'), hit = null;
+    rows.forEach(function (r) { if (U.s(r['Location Code']).toUpperCase() === code) hit = r; });
+    var obj = { 'Floor': U.s(a.floor), 'Zone': U.s(a.zone), 'Shelf': U.s(a.shelf), 'Description': U.s(a.desc) };
+    if (a.isNew === true) {
+      if (hit) throw new Error('The location ' + code + ' already exists.');
+      obj['Location Code'] = code;
+      Db.append('locations', [obj], { 'Location Code': '@' });
+    } else {
+      if (!hit) throw new Error('That location no longer exists.');
+      Db.update('locations', hit._row, obj);
+    }
+    return { code: code };
+  },
+
+  // ---------- product master data ----------
+  PRD_COLS_: ['Item Code', 'Tally Name', 'Stock Group', 'Catalog Name', 'Pcs / Set', 'List Price', 'Customisation', 'Product Type', 'Material', 'Size', 'Colour',
+              'Brand', 'HSN', 'GST_Pct', 'Photo_link', 'Verified', 'Verified_By', 'Verified_On'],
+  prdOut_: function (r, items) {
+    var code = U.s(r['Item Code']), g = U.frac(r['GST_Pct']), lp = U.toNum(r['List Price']), pcs = U.toNum(r['Pcs / Set']), p = items[code];
+    var o = {
+      code: code, tallyName: U.s(r['Tally Name']), group: U.s(r['Stock Group']), catalogName: U.s(r['Catalog Name']), pcs: pcs >= 1 ? pcs : 1,
+      listPrice: isNaN(lp) ? '' : lp, customisation: U.s(r['Customisation']), productType: U.s(r['Product Type']), material: U.s(r['Material']), size: U.s(r['Size']),
+      colour: U.s(r['Colour']), brand: U.s(r['Brand']), hsn: U.s(r['HSN']), gst: U.s(r['GST_Pct']) === '' || isNaN(g) ? '' : U.r4(g * 100),
+      photoLink: U.s(r['Photo_link']), verified: r['Verified'] === true || /^true$/i.test(U.s(r['Verified'])), verifiedBy: U.s(r['Verified_By']), verifiedOn: AcctApi.iso_(r['Verified_On']),
+      wh: p ? p.wh : 0, avail: p ? p.avail : '', row: r._row
+    };
+    o.missing = [];
+    if (!o.catalogName) o.missing.push('Catalog name');
+    if (!o.hsn) o.missing.push('HSN');
+    if (o.gst === '') o.missing.push('GST');
+    if (o.listPrice === '') o.missing.push('List price');
+    return o;
+  },
+  /** args: { filter: 'Needs details' | 'Unverified' | 'All', search } */
+  prdList: function (a) {
+    var items = Items.map(), f = U.s(a.filter) || 'Needs details', q = U.s(a.search);
+    var all = Db.readCols('products', AdminApi.PRD_COLS_).map(function (r) { return AdminApi.prdOut_(r, items); });
+    var counts = { total: all.length, needs: 0, unverified: 0 }, lists = { groups: {}, types: {}, materials: {}, brands: {}, colours: {}, sizes: {} };
+    all.forEach(function (p) {
+      if (p.missing.length) counts.needs++;
+      if (!p.verified) counts.unverified++;
+      if (p.group) lists.groups[p.group] = 1; if (p.productType) lists.types[p.productType] = 1; if (p.material) lists.materials[p.material] = 1;
+      if (p.brand) lists.brands[p.brand] = 1; if (p.colour) lists.colours[p.colour] = 1; if (p.size) lists.sizes[p.size] = 1;
+    });
+    var rows = all.filter(function (p) {
+      if (f === 'Needs details' && !p.missing.length) return false;
+      if (f === 'Unverified' && p.verified) return false;
+      return !q || Rows.matches([p.code, p.tallyName, p.catalogName, p.group, p.productType, p.material, p.brand, p.colour, p.hsn].join(' '), q);
+    });
+    rows.sort(function (x, y) { return x.code.length - y.code.length || (x.code < y.code ? -1 : x.code > y.code ? 1 : 0); });
+    var out = {};
+    Object.keys(lists).forEach(function (k) { out[k] = Object.keys(lists[k]).sort().slice(0, 300); });
+    return { shown: rows.length, rows: rows.slice(0, CONFIG.MAX_ROWS), counts: counts, lists: out };
+  },
+  prdRow_: function (code) {
+    var c = U.s(code), hit = null;
+    if (!c) throw new Error('Pick an item.');
+    Db.readCols('products', ['Item Code']).forEach(function (r) { if (U.s(r['Item Code']) === c) hit = r; });
+    if (!hit) throw new Error('Item ' + c + ' was not found in Products.');
+    return hit;
+  },
+  /**
+   * Change an item's details. args: { code, catalogName, group, pcs, listPrice, customisation, productType, material, size, colour, brand,
+   * hsn, gst (percent), photoLink }. The Tally name is imported from Tally and is not changed here.
+   */
+  prdSave: function (a) {
+    var hit = AdminApi.prdRow_(a.code), pcs = U.toNum(a.pcs), lp = U.s(a.listPrice) === '' ? '' : U.toNum(a.listPrice), gst = U.s(a.gst) === '' ? '' : U.toNum(a.gst);
+    if (!(pcs >= 1) || pcs !== Math.floor(pcs)) throw new Error('Pieces per set must be a whole number, 1 or more.');
+    if (lp !== '' && (isNaN(lp) || lp < 0)) throw new Error('The list price must be 0 or more (Rs per piece, GST excluded).');
+    if (gst !== '' && (isNaN(gst) || gst < 0 || gst > 100)) throw new Error('GST must be between 0 and 100 %.');
+    var link = U.s(a.photoLink);
+    if (link && !/^https?:\/\//i.test(link)) throw new Error('The photo link must start with https://');
+    var hsn = U.s(a.hsn).replace(/\s+/g, '');
+    if (hsn && !/^\d{4,8}$/.test(hsn)) throw new Error('HSN is 4 to 8 digits.');
+    Db.update('products', hit._row, {
+      'Catalog Name': U.s(a.catalogName).replace(/\s+/g, ' '), 'Stock Group': U.s(a.group) || 'Uncategorised', 'Pcs / Set': pcs, 'List Price': lp,
+      'Customisation': U.s(a.customisation), 'Product Type': U.s(a.productType), 'Material': U.s(a.material), 'Size': U.s(a.size), 'Colour': U.s(a.colour),
+      'Brand': U.s(a.brand), 'HSN': hsn, 'GST_Pct': gst === '' ? '' : gst / 100, 'Photo_link': link
+    }, { 'HSN': '@', 'GST_Pct': '0.00%' });
+    Catalog._codes = null;
+    return { code: U.s(a.code) };
+  },
+  /** args: { codes: [..], verified: true|false } */
+  prdVerify: function (a, user) {
+    var codes = Rows.ids(a.codes), on = a.verified !== false, want = {}, done = 0;
+    if (!codes.length) throw new Error('Pick at least one item.');
+    codes.forEach(function (c) { want[c] = 1; });
+    Db.readCols('products', ['Item Code']).forEach(function (r) {
+      if (!want[U.s(r['Item Code'])]) return;
+      Db.update('products', r._row, on ? { 'Verified': true, 'Verified_By': user.email, 'Verified_On': U.today() } : { 'Verified': false, 'Verified_By': '', 'Verified_On': '' });
+      done++;
+    });
+    return { done: done };
+  },
+
+  // ---------- sheet check ----------
+  /** The same check as runDiagnostics in the editor, for every tab the app uses. */
+  check: function () {
+    var out = [];
+    Object.keys(TABLES).forEach(function (key) {
+      try {
+        var m = Db.meta(key), missing = (REQUIRED_HEADERS[key] || []).filter(function (h) { return !m.cols[Db.norm(h)]; });
+        out.push({ sheet: m.def.sheet, ok: !missing.length, rows: Math.max(0, Db.lastDataRow(m) - m.def.headerRow), missing: missing, error: '' });
+      } catch (e) { out.push({ sheet: TABLES[key].sheet, ok: false, rows: 0, missing: [], error: String(e.message || e) }); }
+    });
+    return { tables: out };
+  },
+
+  // ---------- overview ----------
+  /** What needs attention, department by department, plus the things that look wrong. */
+  overview: function () {
+    var today = U.isoToday(), week = U.addDaysIso(today, -7), pq = ProcApi.pqCounts(), po = ProcApi.poList({ filter: 'All' }), wh = WhApi.counts();
+    var ord = AcctApi.ordList({ filter: 'All' }), bills = AcctApi.billList({ filter: 'All' }), orders = AcctApi.orders_(), grns = AcctApi.bills_();
+    var cards = [
+      { dept: 'Procurement', title: 'Requirements waiting for a decision', value: pq.awaiting, sub: pq.accepted + ' accepted, not on a PO yet' },
+      { dept: 'Procurement', title: 'Purchase orders', value: po.counts.draft, sub: 'draft · ' + po.counts.awaiting + ' sent, awaiting delivery' },
+      { dept: 'Warehouse', title: 'Deliveries to receive', value: wh.receiving, sub: wh.putaway + (wh.putaway === 1 ? ' line' : ' lines') + ' to put away' },
+      { dept: 'Warehouse', title: 'Orders to ship', value: wh.dispatch, sub: wh.ready + ' ready to dispatch' },
+      { dept: 'Warehouse', title: 'Stock counts to review', value: wh.audit, sub: 'waiting for Accounts' },
+      { dept: 'Accounts', title: 'Orders to invoice', value: ord.counts.toInvoice, sub: 'Rs ' + U.inr(ord.sum.toInvoiceValue, 0) + ' not yet billed' },
+      { dept: 'Accounts', title: 'To collect from customers', value: ord.sum.outstanding, money: true, sub: ord.sum.overdueCount + ' overdue (Rs ' + U.inr(ord.sum.overdue, 0) + ')' },
+      { dept: 'Accounts', title: 'To pay to suppliers', value: bills.sum.payable, money: true, sub: bills.counts.toBill + ' deliveries not billed yet' }
+    ];
+    var ex = [];
+    function add(sev, dept, title, list) { if (list.length) ex.push({ sev: sev, dept: dept, title: list.length + ' ' + title, items: list.slice(0, 5), more: Math.max(0, list.length - 5) }); }
+
+    add('high', 'Procurement', po.rows.filter(function (p) { return p.late; }).length === 1 ? 'purchase order is past its delivery date' : 'purchase orders are past their delivery date',
+      po.rows.filter(function (p) { return p.late; }).map(function (p) { return p.no + ' · ' + (p.supplier || 'no supplier') + ' · due ' + AdminApi.fmt_(p.delivery); }));
+    var accepted = ProcApi.pqList({ filter: 'Accepted' }).rows.filter(function (r) { return r.needBy && r.needBy < today; });
+    add('high', 'Procurement', accepted.length === 1 ? 'accepted requirement is past its need-by date and not ordered' : 'accepted requirements are past their need-by date and not ordered',
+      accepted.map(function (r) { return r.item + ' · needed by ' + AdminApi.fmt_(r.needBy); }));
+    var unbilled = orders.filter(function (o) { return o.state === 'To invoice' && o.dispatched && o.value > 0; });
+    add('high', 'Accounts', unbilled.length === 1 ? 'order was dispatched but not invoiced' : 'orders were dispatched but not invoiced',
+      unbilled.map(function (o) { return o.no + ' · ' + o.customer + ' · Rs ' + U.inr(o.value, 0); }));
+    var late = orders.filter(function (o) { return o.state === 'Overdue'; });
+    add('high', 'Accounts', late.length === 1 ? 'customer payment is overdue' : 'customer payments are overdue',
+      late.map(function (o) { return o.no + ' · ' + o.customer + ' · Rs ' + U.inr(o.balance, 0) + ' · ' + o.overdueDays + ' days late'; }));
+    var latePay = grns.filter(function (b) { return b.state === 'Overdue'; });
+    add('med', 'Accounts', latePay.length === 1 ? 'supplier bill is overdue' : 'supplier bills are overdue',
+      latePay.map(function (b) { return b.no + ' · ' + b.supplier + ' · Rs ' + U.inr(b.balance, 0) + ' · ' + b.overdueDays + ' days late'; }));
+    var unb = grns.filter(function (b) { return b.state === 'To bill' && b.receivedDate && b.receivedDate <= week; });
+    add('med', 'Accounts', unb.length === 1 ? 'delivery was received over a week ago and is not billed' : 'deliveries were received over a week ago and are not billed',
+      unb.map(function (b) { return b.no + ' · ' + b.supplier + ' · received ' + AdminApi.fmt_(b.receivedDate); }));
+    var old = [];
+    Db.readAll('audit').forEach(function (r) {
+      var d = AcctApi.iso_(r['Counted At']);
+      if ((U.s(r['Status']) || 'Pending') === 'Pending' && d && d <= week) old.push(U.s(r['Description']) || U.s(r['Item Code']) || 'Unnamed item');
+    });
+    add('med', 'Accounts', old.length === 1 ? 'stock count has waited over a week for review' : 'stock counts have waited over a week for review', old.map(function (n) { return n; }));
+    var short = WhApi.stockList({ filter: 'Short' });
+    add('high', 'Warehouse', short.rows.length === 1 ? 'item is promised to customers beyond the stock in the warehouse' : 'items are promised to customers beyond the stock in the warehouse',
+      short.rows.map(function (r) { return r.name + ' · available ' + AdminApi.qty_(r.avail) + ' pcs'; }));
+    var mism = WhApi.stockList({ filter: 'Mismatch' });
+    add('info', 'Warehouse', mism.rows.length === 1 ? 'item where the warehouse count differs from the Tally books' : 'items where the warehouse count differs from the Tally books',
+      mism.rows.map(function (r) { return r.name + ' · books ' + AdminApi.qty_(r.books) + ' vs warehouse ' + AdminApi.qty_(r.wh); }));
+    var noTax = [];
+    Db.readCols('products', ['Item Code', 'Tally Name', 'GST_Pct', 'HSN']).forEach(function (r) {
+      var p = Items.map()[U.s(r['Item Code'])];
+      if (p && p.wh !== 0 && (U.s(r['GST_Pct']) === '' || U.s(r['HSN']) === '')) noTax.push(p.name + ' · ' + p.code);
+    });
+    add('info', 'Admin', noTax.length === 1 ? 'item in the warehouse has no GST rate or HSN' : 'items in the warehouse have no GST rate or HSN', noTax);
+    var users = AdminApi.usrList({}, { email: '' });
+    var noRole = ['Sales', 'Procurement', 'Warehouse', 'Accounts'].filter(function (r) { return !users.counts[r]; });
+    add('info', 'Admin', noRole.length === 1 ? 'role has nobody in it' : 'roles have nobody in them', noRole.map(function (r) { return r + ' - add people on the Users tab'; }));
+    var bad = users.rows.filter(function (u) { return !u.valid; });
+    add('high', 'Admin', bad.length === 1 ? 'user has a role the app does not know' : 'users have a role the app does not know', bad.map(function (u) { return u.name + ' · ' + u.email + ' · "' + u.role + '"'; }));
+    var order = { high: 0, med: 1, info: 2 };
+    ex.sort(function (x, y) { return order[x.sev] - order[y.sev]; });
+    return { today: today, cards: cards, exceptions: ex };
+  }
+};
+# ===== END OF Admin =====
+
+##############################################################################
+# FILE 8 of 25 :  Index    [HTML file]   REPLACES your existing Index.html (one template for all five departments)
 # first line of this file is:  <!DOCTYPE html>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -1684,9 +2425,7 @@ var WhApi = {
             <button type="button" class="mi off" role="menuitem" disabled><span class="dt" aria-hidden="true"><?= d.initial ?></span><span class="tx"><b><?= d.label ?></b><small>Not available for your role</small></span></button>
               <? } ?>
             <? }); ?>
-            <button type="button" class="mi off" role="menuitem" disabled><span class="dt" aria-hidden="true">A</span><span class="tx"><b>Accounts</b><small>Not available yet</small></span></button>
-            <button type="button" class="mi off" role="menuitem" disabled><span class="dt" aria-hidden="true">Ad</span><span class="tx"><b>Admin</b><small>Not available yet</small></span></button>
-            <div class="ft">Sales, Procurement and Warehouse are switched on. Accounts and Admin screens will appear here when they are added.</div>
+            <div class="ft">Each person opens the department for their role. Admin can open them all.</div>
           </div>
         </div>
         <div class="gs" id="gs">
@@ -1742,7 +2481,7 @@ var WhApi = {
 # ===== END OF Index =====
 
 ##############################################################################
-# FILE 7 of 16 :  DeptShell    [HTML file]   NEW
+# FILE 9 of 25 :  DeptShell    [HTML file]   REPLACES DeptShell.html from the earlier version (adds Accounts/Admin icons, badges and helpers) - or NEW
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -1753,7 +2492,7 @@ var WhApi = {
 (function () {
   'use strict';
   var App = window.App, h = App.h, noop = function () {};
-  var PW = window.PW = { dept: String(window.DEPT || 'sales').toLowerCase(), label: { sales: 'Sales', procurement: 'Procurement', warehouse: 'Warehouse' } };
+  var PW = window.PW = { dept: String(window.DEPT || 'sales').toLowerCase(), label: { sales: 'Sales', procurement: 'Procurement', warehouse: 'Warehouse', accounts: 'Accounts', admin: 'Admin' } };
   PW.active = function (d) { return PW.dept === d; };
 
   // ---------- icons for the new tabs (Client.html only knows the Sales ones) ----------
@@ -1766,7 +2505,16 @@ var WhApi = {
     stock: [['path', { d: 'M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7zM3.3 7 12 12l8.7-5M12 22V12' }]],
     audit: [['path', { d: 'm9 11 3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' }]],
     truck: [['path', { d: 'M1 3h15v13H1zM16 8h4l3 3v5h-7z' }]],
-    pdf: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5' }]]
+    pdf: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5' }]],
+    // Accounts
+    orderpay: [['rect', { x: 2, y: 5, width: 20, height: 14, rx: 2 }], ['path', { d: 'M2 10h20M6 15h4' }]],
+    billpay: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 3v5h5M9 13h6M9 17h6' }]],
+    payments: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M9 8h6M9 12h6M9 8c4 0 4 5 0 5l4 4' }]],
+    // Admin
+    overview: [['rect', { x: 3, y: 3, width: 7, height: 9, rx: 1.5 }], ['rect', { x: 14, y: 3, width: 7, height: 5, rx: 1.5 }], ['rect', { x: 14, y: 12, width: 7, height: 9, rx: 1.5 }], ['rect', { x: 3, y: 16, width: 7, height: 5, rx: 1.5 }]],
+    users: [['circle', { cx: 9, cy: 8, r: 3.5 }], ['path', { d: 'M2.5 20c.6-3.4 3.2-5.5 6.5-5.5s5.9 2.1 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .7 3.2 2.4 3.5 5.2' }]],
+    products: [['path', { d: 'M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z' }], ['circle', { cx: 7.5, cy: 7.5, r: 1.2 }]],
+    locations: [['path', { d: 'M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0z' }], ['circle', { cx: 12, cy: 10, r: 3 }]]
   };
   var baseIcon = App.icon;
   App.icon = function (name, size) {
@@ -1810,13 +2558,18 @@ var WhApi = {
         PW.badge('purchase', d.draft, 'Draft purchase orders');
       }).catch(noop);
     };
+  } else if (PW.dept === 'accounts') {
+    App.refreshAttn = function () {
+      App.api('acc.counts').then(function (d) {
+        PW.badge('orderpay', d.toInvoice + d.overdue, 'Orders to invoice and overdue payments');
+        PW.badge('billpay', d.toBill + d.payOverdue, 'Deliveries to bill and overdue supplier bills');
+        PW.badge('audit', d.audit, 'Counts waiting for review');
+      }).catch(noop);
+    };
+  } else if (PW.dept === 'admin') {
+    App.refreshAttn = noop;        // the Overview board sets its own badge when it loads: the overview reads many tabs
   } else if (PW.dept === 'warehouse') {
     App.refreshAttn = function () {
-      var role = App.boot && App.boot.user ? App.boot.user.role : '';
-      if (role === 'Accounts') {
-        App.api('audit.list', { filter: 'Pending' }).then(function (d) { PW.badge('audit', d.counts.pending, 'Counts waiting for review'); }).catch(noop);
-        return;
-      }
       App.api('wh.counts').then(function (d) {
         PW.badge('receiving', d.receiving, 'Deliveries to receive');
         PW.badge('putaway', d.putaway, 'Lines waiting for a location');
@@ -1888,13 +2641,100 @@ var WhApi = {
     box.addEventListener('input', function () { clearTimeout(t); t = setTimeout(function () { onChange(box.value); }, 300); });
     return box;
   };
+  /** Money as "Rs 1,23,456" (no decimals) or with paise: PW.rs(1234.5, 2) */
+  PW.rs = function (n, dec) { return 'Rs ' + App.inr(n, dec === undefined ? 0 : dec); };
+  /** a number card: PW.stat('To collect', 'Rs 1,200', 'note', 'c') */
+  PW.stat = function (label, value, sub, tone) {
+    return h('div', { class: 'stat' + (tone ? ' ' + tone : '') }, h('i', { text: tone === 'c' ? '!' : (tone === 'g' ? '✓' : '#') }), h('div', null, h('span', { text: label }), h('b', { text: String(value) }), sub ? h('span', { text: sub, style: 'font-weight:500' }) : null));
+  };
+  /** the link to another department's page (read from the department menu), or '' */
+  PW.deptUrl = function (label) {
+    var url = '';
+    Array.prototype.forEach.call(document.querySelectorAll('#dept-menu a.mi'), function (a) {
+      var b = a.querySelector('b');
+      if (b && b.textContent === label) url = a.getAttribute('href');
+    });
+    return url;
+  };
+  /** Put a title (and a line under it) in an App.drawer header */
+  PW.drawerTitle = function (drawer, title, sub) {
+    var head = drawer.el.querySelector('.drawer-h'), h2 = head.querySelector('h2'), p = head.querySelector('p');
+    h2.textContent = title;
+    if (!p) { p = h('p'); h2.parentNode.appendChild(p); }
+    p.textContent = sub || '';
+  };
+  /** Download rows as a spreadsheet-friendly file. cols = [{ h, f(row) }] */
+  PW.csv = function (name, cols, rows) {
+    function q(v) { v = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+    var lines = [cols.map(function (c) { return q(c.h); }).join(',')];
+    rows.forEach(function (r) { lines.push(cols.map(function (c) { return q(c.f(r)); }).join(',')); });
+    var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), a = h('a', { href: URL.createObjectURL(blob), download: name });
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+  /** When is money due? Same reading of the payment terms as the server ("30 days credit", "3 months credit", "100% advance", "After delivery") */
+  PW.dueFrom = function (terms, iso) {
+    var t = String(terms || '').toLowerCase(), m = /(\d+)\s*(day|month)/.exec(t), d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    if (!d) return '';
+    function out(x) { return x.getUTCFullYear() + '-' + ('0' + (x.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + x.getUTCDate()).slice(-2); }
+    if (/credit/.test(t) && m) {
+      var y = +d[1], mo = +d[2] - 1, day = +d[3];
+      if (m[2] === 'day') return out(new Date(Date.UTC(y, mo, day + (+m[1]))));
+      var last = new Date(Date.UTC(y, mo + (+m[1]) + 1, 0)).getUTCDate();
+      return out(new Date(Date.UTC(y, mo + (+m[1]), Math.min(day, last))));
+    }
+    return /advance|after delivery|cash/.test(t) ? iso : '';
+  };
+  /**
+   * Record (or correct) one payment. o: { kind: 'Order' | 'GRN', id, no, party, balance (number or null), pay (an existing payment to correct), onDone() }
+   * An order receipt is money Received, a purchase payment is money Paid; "refund" goes the other way.
+   */
+  PW.payDialog = function (o) {
+    var edit = o.pay || null, isOrder = o.kind === 'Order', modes = (App.boot && App.boot.lists && App.boot.lists.paymentModes) || ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'];
+    var f = {
+      date: h('input', { class: 'inp', type: 'date', value: edit ? edit.date : App.today(), max: App.today() }),
+      amount: h('input', { class: 'inp', type: 'number', min: 0, step: '0.01', inputmode: 'decimal', value: edit ? edit.amount : (o.balance > 0.5 ? o.balance : '') }),
+      mode: PW.select(modes, edit ? edit.mode : 'Bank Transfer', 'inp'),
+      ref: h('input', { class: 'inp', type: 'text', maxlength: 60, value: edit ? edit.referenceNo : '', placeholder: 'UTR / cheque no. / receipt no.' }),
+      notes: h('input', { class: 'inp', type: 'text', maxlength: 200, value: edit ? edit.notes : '', placeholder: 'Optional' })
+    };
+    var refund = edit ? null : PW.check(isOrder ? 'This is a refund to the customer' : 'This is a refund from the supplier', false);
+    var verb = isOrder ? 'Receive' : 'Pay';
+    var body = h('div', null,
+      h('p', { class: 'mute', text: (edit ? 'Correct the payment on ' : (isOrder ? 'Money received for ' : 'Money paid for ')) + o.no + (o.party ? ' · ' + o.party : '') + (o.balance !== null && o.balance !== undefined && !edit ? ' · balance ' + PW.rs(o.balance, 2) : '') }),
+      h('div', { class: 'grid' }, App.field('Date', f.date, { required: true }), App.field('Amount (Rs)', f.amount, { required: true }), App.field('How', f.mode, { required: true }), App.field('Reference', f.ref)),
+      h('div', { style: 'margin-top:12px' }, App.field('Note', f.notes)), refund ? h('div', { style: 'margin-top:10px' }, refund.el) : null);
+    function send(over) {
+      var p = { date: f.date.value, amount: App.num(f.amount.value), mode: f.mode.value, referenceNo: f.ref.value, notes: f.notes.value };
+      if (edit) { p.id = edit.id; return App.api('pay.save', p); }
+      p.kind = o.kind; p.refId = o.id; p.refund = refund.get(); p.confirmOver = !!over;
+      return App.api('pay.add', p);
+    }
+    App.modal({
+      title: edit ? 'Correct payment' : (isOrder ? 'Receive money' : 'Pay supplier'), body: body,
+      buttons: [{ label: 'Cancel' }, { label: edit ? 'Save changes' : verb, kind: 'primary', onclick: function (api, btn) {
+        App.run(btn, function () {
+          var amt = App.num(f.amount.value);
+          if (isNaN(amt) || amt <= 0) { f.amount.focus(); throw new Error('Enter the amount.'); }
+          if (!f.date.value) { f.date.focus(); throw new Error('Enter the date.'); }
+          var over = !edit && !refund.get() && o.balance !== null && o.balance !== undefined && o.balance > 0 && amt > o.balance + 0.5;
+          var go = over ? App.confirm({ title: 'More than the balance', message: PW.rs(amt, 2) + ' is more than the balance of ' + PW.rs(o.balance, 2) + ' on ' + o.no + '. Record it anyway?', ok: 'Record anyway' }) : Promise.resolve(true);
+          return go.then(function (yes) {
+            if (!yes) return null;
+            return send(over).then(function () { api.close(); App.toast(edit ? 'Payment corrected' : (isOrder ? 'Receipt recorded' : 'Payment recorded'), 'ok'); if (o.onDone) return o.onDone(); });
+          });
+        });
+      } }]
+    });
+    f.amount.focus();
+  };
+
   PW.loadError = function (box, what, e) { App.clear(box).appendChild(h('div', { class: 'note err', text: 'Could not load ' + what + ': ' + (e && e.message ? e.message : e) })); };
 })();
 </script>
 # ===== END OF DeptShell =====
 
 ##############################################################################
-# FILE 8 of 16 :  DeptStyles    [HTML file]   NEW
+# FILE 10 of 25 :  DeptStyles    [HTML file]   REPLACES DeptStyles.html from the earlier version (a few more styles) - or NEW
 # first line of this file is:  <style>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -1902,7 +2742,7 @@ var WhApi = {
 /* DeptStyles.html - the few styles the Procurement and Warehouse boards need on top of Styles.html (same tokens). */
 
 /* the customer / lead search belongs to Sales */
-.dept-procurement #gs,.dept-warehouse #gs{display:none}
+.dept-procurement #gs,.dept-warehouse #gs,.dept-accounts #gs,.dept-admin #gs{display:none}
 
 .pw-check{display:inline-flex;align-items:center;gap:8px;font:600 13.5px var(--sans);color:var(--ink2);cursor:pointer;white-space:nowrap}
 .pw-check input{margin:0}
@@ -1955,6 +2795,26 @@ var WhApi = {
 .pw-note{font-size:12.5px;color:var(--mute)}
 .pw-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
 
+/* Accounts + Admin */
+.drawer table.t{min-width:0}
+.drawer .t th,.drawer .t td{padding-left:12px;padding-right:12px}
+.pw-date{width:165px!important}
+.pw-pay td.pw-dir-in,.pw-in{color:var(--ok);font-weight:700}
+.pw-out{color:var(--warn);font-weight:700}
+.pw-money{white-space:nowrap}
+.pw-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.pw-sum div{background:var(--bg,#F6F7FB);border:1px solid var(--line);border-radius:14px;padding:10px 14px}
+.pw-sum span{display:block;font-size:12px;color:var(--mute);font-weight:700}
+.pw-sum b{font:800 18px var(--head)}
+.pw-ex{border:1px solid var(--line);border-left-width:5px;border-radius:14px;padding:12px 16px;background:var(--surface);margin-bottom:10px}
+.pw-ex.high{border-left-color:var(--err)}.pw-ex.med{border-left-color:var(--warn)}.pw-ex.info{border-left-color:var(--info)}
+.pw-ex h3{font:700 15px var(--sans);margin:0 0 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pw-ex ul{margin:0;padding-left:18px;color:var(--ink2);font-size:13.5px}
+.pw-ex .more{color:var(--mute);font-size:12.5px;margin-top:4px}
+.pw-grp{font:800 13px var(--head);letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:22px 0 10px}
+.pw-pill{display:inline-block;font:700 11.5px var(--sans);padding:2px 9px;border-radius:99px;background:var(--warn-l);color:var(--warn);margin:0 4px 2px 0;white-space:nowrap}
+.pw-tick{color:var(--ok);font-weight:700}
+
 @media (max-width:760px){
   .pw-lines .line-nums{grid-template-columns:repeat(2,minmax(0,1fr))}
   .pw-bar .inp{width:100%}
@@ -1963,7 +2823,7 @@ var WhApi = {
 # ===== END OF DeptStyles =====
 
 ##############################################################################
-# FILE 9 of 16 :  ProcQueueBoard    [HTML file]   NEW
+# FILE 11 of 25 :  ProcQueueBoard    [HTML file]   NEW (unchanged since the earlier version)
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -2196,7 +3056,7 @@ var WhApi = {
 # ===== END OF ProcQueueBoard =====
 
 ##############################################################################
-# FILE 10 of 16 :  PurchaseOrdersBoard    [HTML file]   NEW
+# FILE 12 of 25 :  PurchaseOrdersBoard    [HTML file]   NEW (unchanged since the earlier version)
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -2539,7 +3399,7 @@ var WhApi = {
 # ===== END OF PurchaseOrdersBoard =====
 
 ##############################################################################
-# FILE 11 of 16 :  SuppliersBoard    [HTML file]   NEW
+# FILE 13 of 25 :  SuppliersBoard    [HTML file]   NEW (unchanged since the earlier version)
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -2617,7 +3477,7 @@ var WhApi = {
 # ===== END OF SuppliersBoard =====
 
 ##############################################################################
-# FILE 12 of 16 :  ReceivingBoard    [HTML file]   NEW
+# FILE 14 of 25 :  ReceivingBoard    [HTML file]   NEW (unchanged since the earlier version)
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -2804,7 +3664,7 @@ var WhApi = {
 # ===== END OF ReceivingBoard =====
 
 ##############################################################################
-# FILE 13 of 16 :  PutAwayBoard    [HTML file]   NEW
+# FILE 15 of 25 :  PutAwayBoard    [HTML file]   NEW (unchanged since the earlier version)
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -2885,7 +3745,7 @@ var WhApi = {
 # ===== END OF PutAwayBoard =====
 
 ##############################################################################
-# FILE 14 of 16 :  DispatchBoard    [HTML file]   NEW
+# FILE 16 of 25 :  DispatchBoard    [HTML file]   NEW (unchanged since the earlier version)
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -3094,7 +3954,7 @@ var WhApi = {
 # ===== END OF DispatchBoard =====
 
 ##############################################################################
-# FILE 15 of 16 :  StockBoard    [HTML file]   NEW
+# FILE 17 of 25 :  StockBoard    [HTML file]   NEW (unchanged since the earlier version)
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
@@ -3197,18 +4057,18 @@ var WhApi = {
 # ===== END OF StockBoard =====
 
 ##############################################################################
-# FILE 16 of 16 :  AuditBoard    [HTML file]   NEW
+# FILE 18 of 25 :  AuditBoard    [HTML file]   REPLACES AuditBoard.html from the earlier version (now also loads on the Accounts page) - or NEW
 # first line of this file is:  <script>
 # ----- paste everything BELOW this line, up to the END marker -----
 ##############################################################################
 <script>
-/* AuditBoard.html - stock audit. Warehouse: count what is on a shelf when you are free (pieces) and save it.
+/* AuditBoard.html - stock audit (shared: the Warehouse page and the Accounts page). Warehouse: count what is on a shelf when you are free (pieces) and save it.
    Accounts (and Admin): review each count. Approving makes the ledger match the count (an "Audit adj" line in Stock Movement);
    rejecting changes nothing. System quantity = what the ledger says is at that location. */
 (function () {
   'use strict';
   var App = window.App, h = App.h, PW = window.PW;
-  if (!PW.active('warehouse')) return;
+  if (!PW.active('warehouse') && !PW.active('accounts')) return;
   var LABELS = ['Pending', 'Approved', 'Rejected', 'All'];
   var B = { filter: 'Pending', search: '', seq: 0, rows: [], counts: {}, chips: null, listBox: null, countBox: null, f: {} };
   function role() { return App.boot && App.boot.user ? App.boot.user.role : ''; }
@@ -3322,6 +4182,799 @@ var WhApi = {
 # ===== END OF AuditBoard =====
 
 ##############################################################################
+# FILE 19 of 25 :  OrderReceiptsBoard    [HTML file]   NEW (Accounts)
+# first line of this file is:  <script>
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+<script>
+/* OrderReceiptsBoard.html - Accounts: bill each sales order (after the invoice is made in Tally) and record every rupee received.
+   An order is worth its Invoice Amount once billed, until then its value including GST. A part payment is simply another receipt.
+   "Payment Cleared On" in the sheet is kept right automatically: it holds the date of the last receipt once the invoice is fully paid. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('accounts')) return;
+  var LABELS = ['To invoice', 'To collect', 'Paid', 'All'];
+  var B = { filter: 'To invoice', search: '', seq: 0, rows: [], d: null, listBox: null, countBox: null, statBox: null, chips: null, drawer: null, body: null, O: null };
+
+  function init(root) {
+    B.chips = App.seg({
+      cls: 'chips-s', label: 'Filter orders', value: B.filter,
+      options: LABELS.map(function (l) { return { v: l, label: l }; }), onChange: function (v) { B.filter = v; load(); }
+    });
+    var search = PW.search('Search order, customer, voucher…', 'Search orders', function (v) { B.search = v; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div'); B.statBox = h('div', { class: 'stats', style: 'margin:18px 0' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Order receipts' }),
+      h('p', { text: 'Make the invoice in Tally, record it here, then record every payment that comes in. Overdue payments are listed first.' }))));
+    root.appendChild(B.statBox);
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Orders' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+    B.body = h('div');
+    B.drawer = App.drawer({ title: 'Order', wide: true, body: B.body, footer: [h('button', { type: 'button', class: 'btn', text: 'Close', onclick: function () { B.drawer.close(); } })] });
+  }
+
+  // ---------- list ----------
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('ord.list', { filter: B.filter, search: B.search }).then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.d = d;
+      PW.badge('orderpay', d.counts.toInvoice + d.sum.overdueCount, 'Orders to invoice and overdue payments');
+      PW.chipCounts(B.chips, LABELS, [d.counts.toInvoice, d.counts.toCollect, 0, 0]);
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' order' : ' orders') + (d.shown > d.rows.length ? ' (showing ' + d.rows.length + ': search to narrow it down)' : '');
+      stats(d); renderList();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'orders', e); } });
+  }
+  function stats(d) {
+    App.clear(B.statBox);
+    [PW.stat('Orders to invoice', d.counts.toInvoice, PW.rs(d.sum.toInvoiceValue) + ' not billed yet'),
+     PW.stat('To collect', PW.rs(d.sum.outstanding), d.counts.toCollect + (d.counts.toCollect === 1 ? ' invoice open' : ' invoices open')),
+     PW.stat('Overdue', PW.rs(d.sum.overdue), d.sum.overdueCount + (d.sum.overdueCount === 1 ? ' invoice' : ' invoices'), d.sum.overdueCount ? 'c' : 'g'),
+     PW.stat('Received this month', PW.rs(d.sum.receivedMonth), '', 'g')].forEach(function (n) { B.statBox.appendChild(n); });
+  }
+  function stateBadge(o) {
+    var k = { 'To invoice': 'amber', 'Awaiting payment': 'blue', 'Overdue': 'red', 'Paid': 'green', 'Cancelled': '' }[o.state];
+    return App.badge(o.state, k);
+  }
+  function renderList() {
+    var cols = [
+      { h: 'Order', f: function (o) {
+          var b = h('button', { type: 'button', class: 'ordno', text: o.no, 'aria-label': 'Open ' + o.no });
+          b.addEventListener('click', function () { openOrder(o.id); });
+          return [b, h('span', { class: 'sub', text: App.fmtDate(o.date) + (o.dispatched ? ' · dispatched' : (o.stage ? ' · ' + o.stage : '')) })]; } },
+      { h: 'Customer', f: function (o) { return [o.customer || '–', o.terms ? h('span', { class: 'sub', text: o.terms }) : null]; } },
+      { h: 'Value', cls: 'num', f: function (o) { return o.invoiced ? [h('span', { class: 'pw-money', text: PW.rs(o.invoiceAmount) }), h('span', { class: 'sub', text: 'invoiced' })] : [h('span', { class: 'pw-money', text: PW.rs(o.value) }), h('span', { class: 'sub', text: 'order value' })]; } },
+      { h: 'Invoice', f: function (o) { return o.invoiced ? [o.voucher || '–', h('span', { class: 'sub', text: App.fmtDate(o.invoiceDate) })] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Due', f: function (o) { return o.due ? [App.fmtDate(o.due), o.state === 'Overdue' ? h('span', { class: 'sub late', text: o.overdueDays + (o.overdueDays === 1 ? ' day late' : ' days late') }) : null] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Received', cls: 'num', f: function (o) { return o.received ? h('span', { class: 'pw-money pw-in', text: PW.rs(o.received) }) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Balance', cls: 'num', f: function (o) { return o.value > 0 || o.invoiced ? h('span', { class: 'pw-money' + (o.state === 'Overdue' ? ' late' : ''), text: PW.rs(o.balance) }) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Status', f: function (o) { return [stateBadge(o), o.refundDue ? h('span', { class: 'sub late', text: 'refund due' }) : null]; } },
+      { h: '', cls: 'acts', f: function (o) {
+          var primary = o.state === 'To invoice' ? 'Invoice' : (o.state === 'Awaiting payment' || o.state === 'Overdue' ? 'Receive' : 'View');
+          return h('button', { type: 'button', class: 'btn sm' + (primary === 'View' ? '' : ' primary'), text: primary, onclick: function () { openOrder(o.id); } }); } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, B.rows, B.filter === 'To invoice' ? 'Every order has been invoiced.' : (B.filter === 'To collect' ? 'Nothing is waiting to be collected.' : 'No orders found.')));
+  }
+
+  // ---------- one order (drawer) ----------
+  function openOrder(id) {
+    return App.api('ord.get', { id: id }).then(function (o) { B.O = o; render(); B.drawer.open(); }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function refresh() { return Promise.all([App.api('ord.get', { id: B.O.id }).then(function (o) { B.O = o; render(); }), load()]); }
+  function render() {
+    var o = B.O, cancelled = o.status === 'Cancelled';
+    PW.drawerTitle(B.drawer, o.no, o.customer + (o.terms ? ' · ' + o.terms : ''));
+    App.clear(B.body);
+    B.body.appendChild(h('div', { class: 'pw-sum' },
+      h('div', null, h('span', { text: 'Order value (incl. GST)' }), h('b', { text: PW.rs(o.value, 2) })),
+      h('div', null, h('span', { text: 'Invoiced' }), h('b', { text: o.invoiced ? PW.rs(o.invoiceAmount, 2) : 'Not yet' })),
+      h('div', null, h('span', { text: 'Received' }), h('b', { text: PW.rs(o.received, 2) })),
+      h('div', null, h('span', { text: 'Balance' }), h('b', { class: o.state === 'Overdue' ? 'late' : '', text: PW.rs(o.balance, 2) }))));
+    if (cancelled) B.body.appendChild(h('div', { class: 'note', text: o.refundDue ? 'This order is cancelled and ' + PW.rs(o.received, 2) + ' was received. Record the refund below.' : 'This order is cancelled.' }));
+
+    // 1. lines
+    var lines = App.table([
+      { h: 'Item', f: function (l) { return [l.name, h('span', { class: 'sub', text: l.itemCode })]; } },
+      { h: 'Quantity', cls: 'num', f: function (l) { return [App.fmtQty(l.sets) + ' sets', h('span', { class: 'sub', text: '× ' + App.fmtQty(l.pcs) + ' pcs' })]; } },
+      { h: 'Rate / pc', cls: 'num', f: function (l) { return [App.inr(l.price, 2), h('span', { class: 'sub', text: '+ ' + App.fmtQty(App.r2(l.gst * 100)) + '% GST' })]; } },
+      { h: 'Amount', cls: 'num', f: function (l) { return App.inr(l.amount, 2); } }
+    ], o.lineList, '');
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '1' }), h('h2', { text: 'What was ordered' }))),
+      o.lineList.length ? lines : h('div', { class: 'empty', text: 'This order has no lines yet.' })));
+
+    // 2. billing
+    var f = {
+      voucher: h('input', { class: 'inp', type: 'text', maxlength: 40, value: o.voucher, placeholder: 'Tally voucher number' }),
+      date: h('input', { class: 'inp', type: 'date', value: o.invoiceDate || App.today(), max: App.today() }),
+      amount: h('input', { class: 'inp', type: 'number', min: 0, step: '0.01', inputmode: 'decimal', value: o.invoiced ? o.invoiceAmount : (o.value || '') }),
+      due: h('input', { class: 'inp', type: 'date', value: o.due || o.suggestedDue || '' })
+    };
+    var dueTouched = !!o.due;
+    f.due.addEventListener('input', function () { dueTouched = true; });
+    f.date.addEventListener('change', function () { if (!dueTouched) f.due.value = PW.dueFrom(o.terms, f.date.value); });
+    var save = h('button', { type: 'button', class: 'btn primary', text: o.invoiced ? 'Save changes' : 'Save invoice' });
+    save.addEventListener('click', function () {
+      App.run(save, function () {
+        if (!f.voucher.value.trim()) { f.voucher.focus(); throw new Error('Enter the Tally voucher number.'); }
+        var amt = App.num(f.amount.value);
+        if (isNaN(amt) || amt <= 0) { f.amount.focus(); throw new Error('Enter the invoice amount.'); }
+        return App.api('ord.bill', { id: o.id, voucherNo: f.voucher.value, invoiceDate: f.date.value, invoiceAmount: amt, dueDate: f.due.value }).then(function () {
+          App.toast('Invoice saved for ' + o.no, 'ok'); return refresh();
+        });
+      });
+    });
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'Invoice' })),
+      o.invoiced ? App.badge('Invoiced ' + App.fmtDate(o.invoiceDate), 'green') : App.badge('Not invoiced', 'amber')),
+      cancelled ? h('div', { class: 'empty', text: 'A cancelled order is not invoiced.' }) : [
+        h('div', { class: 'grid' }, App.field('Tally voucher no.', f.voucher, { required: true }), App.field('Invoice date', f.date, { required: true }),
+          App.field('Invoice amount (Rs, incl. GST)', f.amount, { required: true, hint: h('span', { class: 'pw-note', text: 'Order value is ' + PW.rs(o.value, 2) }) }),
+          App.field('Payment due on', f.due, { hint: h('span', { class: 'pw-note', text: o.terms ? 'Terms: ' + o.terms : 'No payment terms on the order' }) })),
+        h('div', { class: 'actions' }, save)]));
+
+    // 3. receipts
+    var recv = h('button', { type: 'button', class: 'btn primary', text: cancelled ? 'Record refund' : 'Receive money' });
+    recv.addEventListener('click', function () { PW.payDialog({ kind: 'Order', id: o.id, no: o.no, party: o.customer, balance: o.balance, onDone: refresh }); });
+    var pays = o.paymentList.map(function (p) {
+      return h('tr', null, h('td', { 'data-l': 'Date', text: App.fmtDate(p.date) }),
+        h('td', { 'data-l': 'Amount', class: 'num' }, h('span', { class: p.direction === 'Received' ? 'pw-in' : 'pw-out', text: (p.direction === 'Received' ? '' : '− ') + PW.rs(p.amount, 2) }), p.direction === 'Paid' ? h('span', { class: 'sub', text: 'refund' }) : null),
+        h('td', { 'data-l': 'How', text: p.mode }), h('td', { 'data-l': 'Reference' }, p.referenceNo || h('span', { class: 'dash', text: '–' }), p.notes ? h('span', { class: 'sub', text: p.notes }) : null),
+        h('td', { 'data-l': 'By', text: p.by }),
+        h('td', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm', text: 'Correct', onclick: function () { PW.payDialog({ kind: 'Order', id: o.id, no: o.no, party: o.customer, balance: null, pay: p, onDone: refresh }); } })));
+    });
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '3' }), h('h2', { text: 'Money received' })), recv),
+      pays.length ? h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, h('tr', null, h('th', { text: 'Date' }), h('th', { class: 'num', text: 'Amount' }), h('th', { text: 'How' }), h('th', { text: 'Reference' }), h('th', { text: 'Entered by' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })))), h('tbody', null, pays)))
+        : h('div', { class: 'empty', text: 'Nothing received yet.' }),
+      o.clearedOn ? h('p', { class: 'pw-note', style: 'margin:12px 0 0', text: 'Fully paid: payment cleared on ' + App.fmtDate(o.clearedOn) + '.' }) : null));
+  }
+
+  App.register('orderpay', 'Order receipts', { init: init, show: function () { load(); } });
+})();
+</script>
+# ===== END OF OrderReceiptsBoard =====
+
+##############################################################################
+# FILE 20 of 25 :  PurchaseReceiptsBoard    [HTML file]   NEW (Accounts)
+# first line of this file is:  <script>
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+<script>
+/* PurchaseReceiptsBoard.html - Accounts: the supplier side. Each delivery (GRN) gets its bill (Bill Amount + Tally purchase voucher),
+   then every payment to the supplier is recorded against it. A part payment is simply another payment. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('accounts')) return;
+  var LABELS = ['To bill', 'To pay', 'Paid', 'Not received', 'All'];
+  var B = { filter: 'To bill', search: '', seq: 0, rows: [], d: null, listBox: null, countBox: null, statBox: null, chips: null, drawer: null, body: null, G: null };
+
+  function init(root) {
+    B.chips = App.seg({
+      cls: 'chips-s', label: 'Filter deliveries', value: B.filter,
+      options: LABELS.map(function (l) { return { v: l, label: l }; }), onChange: function (v) { B.filter = v; load(); }
+    });
+    var search = PW.search('Search GRN, PO, supplier, invoice, voucher…', 'Search deliveries', function (v) { B.search = v; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div'); B.statBox = h('div', { class: 'stats', style: 'margin:18px 0' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Purchase receipts' }),
+      h('p', { text: 'When goods arrive, enter the supplier’s bill from Tally. Then record each payment you make against it.' }))));
+    root.appendChild(B.statBox);
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Deliveries' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+    B.body = h('div');
+    B.drawer = App.drawer({ title: 'Delivery', wide: true, body: B.body, footer: [h('button', { type: 'button', class: 'btn', text: 'Close', onclick: function () { B.drawer.close(); } })] });
+  }
+
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('bill.list', { filter: B.filter, search: B.search }).then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.d = d;
+      PW.badge('billpay', d.counts.toBill + d.sum.overdueCount, 'Deliveries to bill and overdue supplier bills');
+      PW.chipCounts(B.chips, LABELS, [d.counts.toBill, d.counts.toPay, 0, 0, 0]);
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' delivery' : ' deliveries') + (d.shown > d.rows.length ? ' (showing ' + d.rows.length + ': search to narrow it down)' : '');
+      App.clear(B.statBox);
+      [PW.stat('Received, not billed', d.counts.toBill, 'deliveries waiting for the supplier’s bill'),
+       PW.stat('To pay', PW.rs(d.sum.payable), d.counts.toPay + (d.counts.toPay === 1 ? ' bill open' : ' bills open')),
+       PW.stat('Overdue', PW.rs(d.sum.overdue), d.sum.overdueCount + (d.sum.overdueCount === 1 ? ' bill' : ' bills'), d.sum.overdueCount ? 'c' : 'g'),
+       PW.stat('Paid this month', PW.rs(d.sum.paidMonth), '', 'g')].forEach(function (n) { B.statBox.appendChild(n); });
+      renderList();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'deliveries', e); } });
+  }
+  function badge(b) {
+    return App.badge(b.state, { 'To bill': 'amber', 'To pay': 'blue', 'Overdue': 'red', 'Paid': 'green', 'Not received': '' }[b.state]);
+  }
+  function renderList() {
+    var cols = [
+      { h: 'Delivery', f: function (b) {
+          var o = h('button', { type: 'button', class: 'ordno', text: b.no, 'aria-label': 'Open ' + b.no });
+          o.addEventListener('click', function () { openBill(b.id); });
+          return [o, h('span', { class: 'sub', text: b.poNo ? 'PO ' + b.poNo : 'No PO' })]; } },
+      { h: 'Supplier', f: function (b) { return [b.supplier || '–', b.terms ? h('span', { class: 'sub', text: b.terms }) : null]; } },
+      { h: 'Received', f: function (b) { return b.receivedDate ? App.fmtDate(b.receivedDate) : (b.received ? 'Yes' : h('span', { class: 'dash', text: 'Not yet' })); } },
+      { h: 'Supplier invoice', f: function (b) { return b.invoiceNo ? [b.invoiceNo, b.invoiceDate ? h('span', { class: 'sub', text: App.fmtDate(b.invoiceDate) }) : null] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Bill', cls: 'num', f: function (b) { return b.billAmount !== null ? [h('span', { class: 'pw-money', text: PW.rs(b.billAmount) }), h('span', { class: 'sub', text: b.voucher })] : [h('span', { class: 'dash', text: '–' }), b.recValue || b.poValue ? h('span', { class: 'sub', text: (b.received && b.recValue ? 'received ' + PW.rs(b.recValue) : 'PO ' + PW.rs(b.poValue)) }) : null]; } },
+      { h: 'Paid', cls: 'num', f: function (b) { return b.paid ? h('span', { class: 'pw-money pw-out', text: PW.rs(b.paid) }) : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Balance', cls: 'num', f: function (b) { return b.balance === null ? h('span', { class: 'dash', text: '–' }) : h('span', { class: 'pw-money' + (b.state === 'Overdue' ? ' late' : ''), text: PW.rs(b.balance) }); } },
+      { h: 'Due', f: function (b) { return b.due && b.state !== 'Paid' ? [App.fmtDate(b.due), b.state === 'Overdue' ? h('span', { class: 'sub late', text: b.overdueDays + (b.overdueDays === 1 ? ' day late' : ' days late') }) : null] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Status', f: function (b) { return badge(b); } },
+      { h: '', cls: 'acts', f: function (b) {
+          var primary = b.state === 'To bill' ? 'Add bill' : (b.state === 'To pay' || b.state === 'Overdue' ? 'Pay' : 'View');
+          return h('button', { type: 'button', class: 'btn sm' + (primary === 'View' ? '' : ' primary'), text: primary, onclick: function () { openBill(b.id); } }); } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, B.rows, B.filter === 'To bill' ? 'Every received delivery has its bill.' : (B.filter === 'To pay' ? 'No supplier bill is waiting for payment.' : 'No deliveries found.')));
+  }
+
+  // ---------- one delivery (drawer) ----------
+  function openBill(id) {
+    return App.api('bill.get', { id: id }).then(function (g) { B.G = g; render(); B.drawer.open(); }).catch(function (e) { App.toast(e.message, 'err'); });
+  }
+  function refresh() { return Promise.all([App.api('bill.get', { id: B.G.id }).then(function (g) { B.G = g; render(); }), load()]); }
+  function render() {
+    var g = B.G, billed = g.billAmount !== null;
+    PW.drawerTitle(B.drawer, g.no + (g.poNo ? ' · PO ' + g.poNo : ''), g.supplier + (g.terms ? ' · ' + g.terms : ''));
+    App.clear(B.body);
+    B.body.appendChild(h('div', { class: 'pw-sum' },
+      h('div', null, h('span', { text: 'Value of the order' }), h('b', { text: PW.rs(g.poValue, 2) })),
+      h('div', null, h('span', { text: 'Value of goods received' }), h('b', { text: g.received ? PW.rs(g.recValue, 2) : 'Not received' })),
+      h('div', null, h('span', { text: 'Supplier bill' }), h('b', { text: billed ? PW.rs(g.billAmount, 2) : 'Not entered' })),
+      h('div', null, h('span', { text: 'Paid' }), h('b', { text: PW.rs(g.paid, 2) })),
+      h('div', null, h('span', { text: 'Balance' }), h('b', { class: g.state === 'Overdue' ? 'late' : '', text: billed ? PW.rs(g.balance, 2) : '–' }))));
+    if (g.damaged > 0) B.body.appendChild(h('div', { class: 'note', text: g.damaged + ' pieces arrived damaged. Check whether the supplier’s bill gives credit for them.' }));
+    if (!g.received && !billed) B.body.appendChild(h('div', { class: 'note', text: 'The goods have not arrived yet. You can still pay an advance below.' }));
+
+    var lines = App.table([
+      { h: 'Item', f: function (l) { return [l.name, h('span', { class: 'sub', text: l.itemCode })]; } },
+      { h: 'Ordered / received', cls: 'num', f: function (l) { return [App.fmtQty(l.expSets) + ' / ' + (l.recSets === null ? '–' : App.fmtQty(l.recSets)) + ' sets', h('span', { class: 'sub', text: '× ' + App.fmtQty(l.per) + ' pcs' + (l.damaged ? ' · ' + l.damaged + ' damaged' : '') })]; } },
+      { h: 'Rate / pc', cls: 'num', f: function (l) { return l.rate ? [App.inr(l.rate, 2), h('span', { class: 'sub', text: '+ ' + App.fmtQty(App.r2(l.gst * 100)) + '% GST' })] : h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Value', cls: 'num', f: function (l) { return l.amount ? App.inr(l.amount, 2) : h('span', { class: 'dash', text: '–' }); } }
+    ], g.lineList, '');
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '1' }), h('h2', { text: 'What arrived' }))),
+      g.lineList.length ? lines : h('div', { class: 'empty', text: 'No lines on this delivery.' })));
+
+    var f = {
+      amount: h('input', { class: 'inp', type: 'number', min: 0, step: '0.01', inputmode: 'decimal', value: billed ? g.billAmount : (g.recValue || g.poValue || '') }),
+      voucher: h('input', { class: 'inp', type: 'text', maxlength: 40, value: g.voucher, placeholder: 'Tally purchase voucher number' }),
+      invNo: h('input', { class: 'inp', type: 'text', maxlength: 60, value: g.invoiceNo, placeholder: 'Number on the supplier’s invoice' }),
+      invDate: h('input', { class: 'inp', type: 'date', value: g.invoiceDate })
+    };
+    var save = h('button', { type: 'button', class: 'btn primary', text: billed ? 'Save changes' : 'Save bill' });
+    save.addEventListener('click', function () {
+      App.run(save, function () {
+        var amt = App.num(f.amount.value);
+        if (isNaN(amt) || amt <= 0) { f.amount.focus(); throw new Error('Enter the bill amount.'); }
+        if (!f.voucher.value.trim()) { f.voucher.focus(); throw new Error('Enter the Tally purchase voucher number.'); }
+        return App.api('bill.save', { id: g.id, billAmount: amt, voucherNo: f.voucher.value, invoiceNo: f.invNo.value, invoiceDate: f.invDate.value }).then(function () {
+          App.toast('Bill saved for ' + g.no, 'ok'); return refresh();
+        });
+      });
+    });
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'Supplier bill' })),
+      billed ? App.badge('Billed', 'green') : App.badge('Not billed', 'amber')),
+      h('div', { class: 'grid' }, App.field('Bill amount (Rs, incl. GST)', f.amount, { required: true, hint: h('span', { class: 'pw-note', text: g.received && g.recValue ? 'Goods received are worth ' + PW.rs(g.recValue, 2) : 'Order value is ' + PW.rs(g.poValue, 2) }) }),
+        App.field('Tally purchase voucher no.', f.voucher, { required: true }), App.field('Supplier invoice no.', f.invNo), App.field('Supplier invoice date', f.invDate)),
+      h('div', { class: 'actions' }, save)));
+
+    var pay = h('button', { type: 'button', class: 'btn primary', text: 'Pay supplier' });
+    pay.addEventListener('click', function () { PW.payDialog({ kind: 'GRN', id: g.id, no: g.no, party: g.supplier, balance: billed ? g.balance : null, onDone: refresh }); });
+    var pays = g.paymentList.map(function (p) {
+      return h('tr', null, h('td', { 'data-l': 'Date', text: App.fmtDate(p.date) }),
+        h('td', { 'data-l': 'Amount', class: 'num' }, h('span', { class: p.direction === 'Paid' ? 'pw-out' : 'pw-in', text: (p.direction === 'Paid' ? '' : '+ ') + PW.rs(p.amount, 2) }), p.direction === 'Received' ? h('span', { class: 'sub', text: 'refund' }) : null),
+        h('td', { 'data-l': 'How', text: p.mode }), h('td', { 'data-l': 'Reference' }, p.referenceNo || h('span', { class: 'dash', text: '–' }), p.notes ? h('span', { class: 'sub', text: p.notes }) : null),
+        h('td', { 'data-l': 'By', text: p.by }),
+        h('td', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm', text: 'Correct', onclick: function () { PW.payDialog({ kind: 'GRN', id: g.id, no: g.no, party: g.supplier, balance: null, pay: p, onDone: refresh }); } })));
+    });
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '3' }), h('h2', { text: 'Payments to the supplier' })), pay),
+      pays.length ? h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, h('tr', null, h('th', { text: 'Date' }), h('th', { class: 'num', text: 'Amount' }), h('th', { text: 'How' }), h('th', { text: 'Reference' }), h('th', { text: 'Entered by' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })))), h('tbody', null, pays)))
+        : h('div', { class: 'empty', text: 'Nothing paid yet.' })));
+  }
+
+  App.register('billpay', 'Purchase receipts', { init: init, show: function () { load(); } });
+})();
+</script>
+# ===== END OF PurchaseReceiptsBoard =====
+
+##############################################################################
+# FILE 21 of 25 :  PaymentsBoard    [HTML file]   NEW (Accounts)
+# first line of this file is:  <script>
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+<script>
+/* PaymentsBoard.html - Accounts: every rupee in and out, newest first. Receipts come from the Order receipts tab and payments from the
+   Purchase receipts tab; this page is for looking things up, correcting a wrong entry and taking a copy into a spreadsheet.
+   Only an Admin can delete a payment. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('accounts')) return;
+  var LABELS = ['All', 'Received', 'Paid'];
+  var B = { dir: 'All', search: '', from: '', to: '', seq: 0, rows: [], d: null, listBox: null, countBox: null, statBox: null, chips: null, fromBox: null, toBox: null };
+  function isAdmin() { return App.boot && App.boot.user && App.boot.user.role === 'Admin'; }
+
+  function init(root) {
+    B.chips = App.seg({ cls: 'chips-s', label: 'Filter payments', value: B.dir, options: LABELS.map(function (l) { return { v: l, label: l === 'Received' ? 'Money in' : (l === 'Paid' ? 'Money out' : 'All') }; }), onChange: function (v) { B.dir = v; load(); } });
+    var search = PW.search('Search order, customer, supplier, reference…', 'Search payments', function (v) { B.search = v; load(); });
+    B.fromBox = h('input', { class: 'inp pw-date', type: 'date', 'aria-label': 'From date' }); B.toBox = h('input', { class: 'inp pw-date', type: 'date', 'aria-label': 'To date' });
+    B.fromBox.addEventListener('change', function () { B.from = B.fromBox.value; load(); }); B.toBox.addEventListener('change', function () { B.to = B.toBox.value; load(); });
+    var month = h('button', { type: 'button', class: 'btn', text: 'This month', onclick: function () {
+      var t = App.today(); B.from = t.slice(0, 8) + '01'; B.to = t; B.fromBox.value = B.from; B.toBox.value = B.to; load(); } });
+    var all = h('button', { type: 'button', class: 'btn', text: 'All dates', onclick: function () { B.from = B.to = ''; B.fromBox.value = B.toBox.value = ''; load(); } });
+    var dl = h('button', { type: 'button', class: 'btn', text: 'Download', onclick: download });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div'); B.statBox = h('div', { class: 'stats', style: 'margin:18px 0' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Payments' }),
+      h('p', { text: 'All money received from customers and paid to suppliers. Correct a wrong amount, date or reference here.' }))));
+    root.appendChild(B.statBox);
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Ledger' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search)),
+      h('div', { class: 'toolbar', style: 'margin-top:10px' }, h('span', { class: 'pw-note', text: 'From' }), B.fromBox, h('span', { class: 'pw-note', text: 'to' }), B.toBox, month, all, h('span', { class: 'grow' }), dl,
+        h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('pay.list', { direction: B.dir, search: B.search, from: B.from, to: B.to }).then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.d = d;
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' payment' : ' payments') + (d.shown > d.rows.length ? ' (showing the latest ' + d.rows.length + ': narrow the dates)' : '');
+      App.clear(B.statBox);
+      [PW.stat('Money in', PW.rs(d.totals.received, 2), 'from customers', 'g'), PW.stat('Money out', PW.rs(d.totals.paid, 2), 'to suppliers'),
+       PW.stat('Net', (d.totals.net < 0 ? '− ' : '') + PW.rs(Math.abs(d.totals.net), 2), d.totals.net < 0 ? 'more went out than came in' : 'in minus out', d.totals.net < 0 ? 'c' : '')].forEach(function (n) { B.statBox.appendChild(n); });
+      render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'payments', e); } });
+  }
+  function download() {
+    if (!B.rows.length) { App.toast('Nothing to download.', 'err'); return; }
+    PW.csv('payments-' + App.today() + '.csv', [
+      { h: 'Date', f: function (p) { return p.date; } }, { h: 'Direction', f: function (p) { return p.direction; } }, { h: 'For', f: function (p) { return p.refNo; } },
+      { h: 'Party', f: function (p) { return p.party; } }, { h: 'Amount', f: function (p) { return p.amount; } }, { h: 'Mode', f: function (p) { return p.mode; } },
+      { h: 'Reference', f: function (p) { return p.referenceNo; } }, { h: 'Entered by', f: function (p) { return p.by; } }, { h: 'Notes', f: function (p) { return p.notes; } }], B.rows);
+  }
+  function correct(p) {
+    PW.payDialog({ kind: p.refType, id: p.refId, no: p.refNo || p.refId, party: p.party, balance: null, pay: p, onDone: load });
+  }
+  function remove(p) {
+    App.confirm({ title: 'Delete payment', message: 'Delete the ' + PW.rs(p.amount, 2) + ' ' + p.direction.toLowerCase() + ' on ' + App.fmtDate(p.date) + ' for ' + (p.refNo || p.refId) + '? This cannot be undone.', ok: 'Delete', danger: true }).then(function (yes) {
+      if (!yes) return null;
+      return App.api('pay.delete', { id: p.id }).then(function () { App.toast('Payment deleted', 'ok'); return load(); }).catch(function (e) { App.toast(e.message, 'err'); });
+    });
+  }
+  function render() {
+    var cols = [
+      { h: 'Date', f: function (p) { return App.fmtDate(p.date); } },
+      { h: 'In / out', f: function (p) { return App.badge(p.direction === 'Received' ? 'Money in' : 'Money out', p.direction === 'Received' ? 'green' : 'amber'); } },
+      { h: 'For', f: function (p) { return [p.refNo || h('span', { class: 'dash', text: 'Unknown ' + p.refType }), h('span', { class: 'sub', text: (p.refType === 'Order' ? 'Order' : 'Delivery') + (p.party ? ' · ' + p.party : '') })]; } },
+      { h: 'Amount', cls: 'num', f: function (p) { return h('span', { class: 'pw-money ' + (p.direction === 'Received' ? 'pw-in' : 'pw-out'), text: PW.rs(p.amount, 2) }); } },
+      { h: 'How', f: function (p) { return [p.mode, p.referenceNo ? h('span', { class: 'sub', text: p.referenceNo }) : null]; } },
+      { h: 'Entered by', f: function (p) { return [p.by, p.notes ? h('span', { class: 'sub', text: p.notes }) : null]; } },
+      { h: '', cls: 'acts', f: function (p) {
+          var out = [h('button', { type: 'button', class: 'btn sm', text: 'Correct', onclick: function () { correct(p); } })];
+          if (isAdmin()) out.push(' ', h('button', { type: 'button', class: 'btn sm danger', text: 'Delete', onclick: function () { remove(p); } }));
+          return out; } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, B.rows, 'No payments match.'));
+  }
+  App.register('payments', 'Payments', { init: init, show: function () { load(); } });
+})();
+</script>
+# ===== END OF PaymentsBoard =====
+
+##############################################################################
+# FILE 22 of 25 :  OverviewBoard    [HTML file]   NEW (Admin)
+# first line of this file is:  <script>
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+<script>
+/* OverviewBoard.html - Admin: where every department stands, what looks wrong, and a check that the sheet still has the tabs and
+   columns the app needs. Read-only: fix things in the department that owns them (the links open that department). */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var B = { seq: 0, cardBox: null, exBox: null, chkBox: null, stamp: null };
+  var DEPTS = ['Procurement', 'Warehouse', 'Accounts', 'Admin'];
+
+  function init(root) {
+    B.cardBox = h('div'); B.exBox = h('div'); B.chkBox = h('div'); B.stamp = h('div', { class: 'count' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Overview' }),
+      h('p', { text: 'A look across the whole business: what is waiting in each department, and anything that looks wrong.' })),
+      h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load }))));
+    root.appendChild(B.stamp);
+    root.appendChild(B.cardBox);
+    root.appendChild(h('div', { class: 'pw-grp', text: 'Needs attention' }));
+    root.appendChild(B.exBox);
+    var check = h('button', { type: 'button', class: 'btn', text: 'Run sheet check' });
+    check.addEventListener('click', function () { App.run(check, runCheck); });
+    root.appendChild(h('div', { class: 'pw-grp', text: 'Sheet check' }));
+    root.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, h('div', null, h('h2', { text: 'Tabs and columns' }), h('p', { class: 'pw-note', style: 'margin:4px 0 0', text: 'Checks that every tab the app uses exists and has the columns it needs.' })), check), B.chkBox));
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.stamp.textContent = 'Loading…';
+    return App.api('adm.overview').then(function (d) {
+      if (seq !== B.seq) return;
+      B.stamp.textContent = 'As of ' + App.fmtDate(d.today) + '. Several tabs are read to build this page, so it takes a few seconds.';
+      var high = d.exceptions.filter(function (e) { return e.sev === 'high'; }).length;
+      PW.badge('overview', high, 'Things that look wrong');
+      cards(d); exceptions(d);
+    }).catch(function (e) { if (seq === B.seq) { B.stamp.textContent = ''; PW.loadError(B.exBox, 'the overview', e); } });
+  }
+  function cards(d) {
+    App.clear(B.cardBox);
+    DEPTS.forEach(function (dep) {
+      var list = d.cards.filter(function (c) { return c.dept === dep; });
+      if (!list.length) return;
+      var url = PW.deptUrl(dep), grid = h('div', { class: 'stats' });
+      list.forEach(function (c) { grid.appendChild(PW.stat(c.title, c.money ? PW.rs(c.value) : c.value, c.sub)); });
+      B.cardBox.appendChild(h('div', { class: 'pw-grp' }, dep, url ? [' ', h('a', { href: url, target: '_top', style: 'text-transform:none;letter-spacing:0;font-weight:600', text: 'open →' })] : null));
+      B.cardBox.appendChild(grid);
+    });
+  }
+  function exceptions(d) {
+    App.clear(B.exBox);
+    if (!d.exceptions.length) { B.exBox.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty', text: 'Nothing looks wrong right now.' }))); return; }
+    d.exceptions.forEach(function (e) {
+      var url = PW.deptUrl(e.dept);
+      B.exBox.appendChild(h('div', { class: 'pw-ex ' + e.sev },
+        h('h3', null, e.title, ' ', App.badge(e.dept, e.sev === 'high' ? 'red' : (e.sev === 'med' ? 'amber' : 'blue')), url ? h('a', { href: url, target: '_top', style: 'font-weight:600;font-size:13px', text: 'open ' + e.dept + ' →' }) : null),
+        h('ul', null, e.items.map(function (t) { return h('li', { text: t }); })), e.more ? h('div', { class: 'more', text: '… and ' + e.more + ' more' }) : null));
+    });
+  }
+  function runCheck() {
+    return App.api('adm.check').then(function (d) {
+      var bad = d.tables.filter(function (t) { return !t.ok; }).length;
+      App.clear(B.chkBox);
+      B.chkBox.appendChild(h('div', { class: bad ? 'note err' : 'note', style: bad ? '' : 'background:var(--ok-l);color:var(--ok)', text: bad ? bad + (bad === 1 ? ' tab has a problem.' : ' tabs have problems.') : 'All ' + d.tables.length + ' tabs look right.' }));
+      B.chkBox.appendChild(App.table([
+        { h: 'Tab', f: function (t) { return t.sheet; } },
+        { h: 'Rows', cls: 'num', f: function (t) { return String(t.rows); } },
+        { h: 'Result', f: function (t) { return t.ok ? App.badge('OK', 'green') : [App.badge('Problem', 'red'), h('span', { class: 'sub late', text: t.error || ('Missing columns: ' + t.missing.join(', ')) })]; } }
+      ], d.tables, ''));
+    });
+  }
+  App.register('overview', 'Overview', { init: init, show: function () { load(); } });
+})();
+</script>
+# ===== END OF OverviewBoard =====
+
+##############################################################################
+# FILE 23 of 25 :  ProductsBoard    [HTML file]   NEW (Admin)
+# first line of this file is:  <script>
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+<script>
+/* ProductsBoard.html - Admin: the product master. Item code and Tally name come from the Tally import; everything else (catalog name,
+   group, pieces per set, price, GST, HSN, type, material, size, colour, brand, picture link) is kept here. Tick "Details checked" once an
+   item is complete. The stock numbers are formulas in the sheet and are only shown, never changed. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var LABELS = ['Needs details', 'Unverified', 'All'];
+  var B = { filter: 'Needs details', search: '', seq: 0, rows: [], d: null, lists: {}, sel: {}, listBox: null, countBox: null, chips: null, bar: null, barTxt: null, drawer: null, body: null, P: null, all: null };
+
+  function init(root) {
+    B.chips = App.seg({ cls: 'chips-s', label: 'Filter items', value: B.filter, options: LABELS.map(function (l) { return { v: l, label: l }; }), onChange: function (v) { B.filter = v; B.sel = {}; load(); } });
+    var search = PW.search('Search item code, name, brand, type, HSN…', 'Search items', function (v) { B.search = v; B.sel = {}; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    B.barTxt = h('b');
+    B.bar = h('div', { class: 'pw-bar', hidden: true, style: 'margin-top:12px' }, B.barTxt, h('span', { class: 'sp' }),
+      h('button', { type: 'button', class: 'btn soft', text: 'Mark as checked', onclick: function (e) { bulk(true, e.currentTarget); } }),
+      h('button', { type: 'button', class: 'btn soft', text: 'Remove checked mark', onclick: function (e) { bulk(false, e.currentTarget); } }),
+      h('button', { type: 'button', class: 'btn soft', text: 'Clear', onclick: function () { B.sel = {}; renderList(); } }));
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Products' }),
+      h('p', { text: 'The master list. Fill in what is missing so quotations, purchase orders and invoices come out right.' })),
+      h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn primary', text: '+ New item', onclick: newItem }))));
+    root.appendChild(h('div', { style: 'margin-top:18px' }, h('div', { class: 'toolbar' }, h('h2', { text: 'Items' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.bar, B.listBox));
+    B.body = h('div');
+    B.drawer = App.drawer({ title: 'Item', wide: true, body: B.body, footer: [h('button', { type: 'button', class: 'btn', text: 'Close', onclick: function () { B.drawer.close(); } })] });
+    ['groups', 'types', 'materials', 'brands', 'colours', 'sizes'].forEach(function (k) { root.appendChild(h('datalist', { id: 'pw-dl-' + k })); });
+  }
+
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('prd.list', { filter: B.filter, search: B.search }).then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.d = d; B.lists = d.lists;
+      Object.keys(d.lists).forEach(function (k) {
+        var dl = document.getElementById('pw-dl-' + k);
+        if (dl) { App.clear(dl); d.lists[k].forEach(function (v) { dl.appendChild(h('option', { value: v })); }); }
+      });
+      PW.chipCounts(B.chips, LABELS, [d.counts.needs, d.counts.unverified, 0]);
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' item' : ' items') + ' of ' + d.counts.total + (d.shown > d.rows.length ? ' (showing the first ' + d.rows.length + ': search to narrow it down)' : '');
+      renderList();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'items', e); } });
+  }
+  function selCount() { return Object.keys(B.sel).length; }
+  function renderBar() {
+    var n = selCount();
+    B.bar.hidden = !n; B.barTxt.textContent = n + (n === 1 ? ' item selected' : ' items selected');
+  }
+  function renderList() {
+    App.clear(B.listBox);
+    renderBar();
+    if (!B.rows.length) { B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: B.filter === 'Needs details' ? 'Every item has its details.' : 'No items found.' }))); return; }
+    B.all = h('input', { type: 'checkbox', 'aria-label': 'Select all shown' });
+    B.all.checked = B.rows.every(function (p) { return B.sel[p.code]; });
+    B.all.addEventListener('change', function () { B.rows.forEach(function (p) { if (B.all.checked) B.sel[p.code] = 1; else delete B.sel[p.code]; }); renderList(); });
+    var head = h('tr', null, h('th', { class: 'pw-c' }, B.all), h('th', { text: 'Item' }), h('th', { text: 'Group' }), h('th', { text: 'Details' }), h('th', { text: 'HSN' }), h('th', { class: 'num', text: 'GST' }),
+      h('th', { class: 'num', text: 'List price' }), h('th', { class: 'num', text: 'In warehouse' }), h('th', { text: 'Status' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+    var body = h('tbody');
+    B.rows.forEach(function (p) {
+      var cb = h('input', { type: 'checkbox', 'aria-label': 'Select ' + p.code });
+      cb.checked = !!B.sel[p.code];
+      cb.addEventListener('change', function () { if (cb.checked) B.sel[p.code] = 1; else delete B.sel[p.code]; renderBar(); B.all.checked = B.rows.every(function (x) { return B.sel[x.code]; }); });
+      var open = h('button', { type: 'button', class: 'ordno', text: p.catalogName || p.tallyName || p.code, 'aria-label': 'Edit ' + p.code });
+      open.addEventListener('click', function () { openItem(p); });
+      var det = [p.productType, p.material, p.size, p.colour, p.brand].filter(Boolean).join(' · ');
+      body.appendChild(h('tr', null,
+        h('td', { class: 'pw-c' }, cb),
+        h('td', { 'data-l': 'Item' }, open, h('span', { class: 'sub', text: p.code + (p.catalogName && p.tallyName ? ' · ' + p.tallyName : '') + ' · ' + p.pcs + ' pcs/set' })),
+        h('td', { 'data-l': 'Group', text: p.group || '–' }),
+        h('td', { 'data-l': 'Details' }, det ? h('div', { class: 'clip', title: det, text: det }) : h('span', { class: 'dash', text: '–' })),
+        h('td', { 'data-l': 'HSN' }, p.hsn || h('span', { class: 'dash', text: '–' })),
+        h('td', { class: 'num', 'data-l': 'GST' }, p.gst === '' ? h('span', { class: 'dash', text: '–' }) : App.fmtQty(p.gst) + '%'),
+        h('td', { class: 'num', 'data-l': 'List price' }, p.listPrice === '' ? h('span', { class: 'dash', text: '–' }) : App.inr(p.listPrice, 2)),
+        h('td', { class: 'num', 'data-l': 'In warehouse' }, p.wh ? App.fmtQty(p.wh) + ' pcs' : h('span', { class: 'dash', text: '0' })),
+        h('td', { 'data-l': 'Status' }, p.verified ? h('span', { class: 'pw-tick', text: '✓ Checked' }) : h('span', { class: 'mute', text: 'Not checked' }), p.missing.length ? h('div', null, p.missing.map(function (m) { return h('span', { class: 'pw-pill', text: 'No ' + (m === 'HSN' || m === 'GST' ? m : m.toLowerCase()) }); })) : null),
+        h('td', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm', text: 'Edit', onclick: function () { openItem(p); } }))));
+    });
+    B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), body)));
+  }
+  function bulk(on, btn) {
+    var codes = Object.keys(B.sel);
+    if (!codes.length) return;
+    App.run(btn, function () {
+      return App.api('prd.verify', { codes: codes, verified: on }).then(function (r) { App.toast(r.done + (r.done === 1 ? ' item ' : ' items ') + (on ? 'marked as checked' : 'unmarked'), 'ok'); B.sel = {}; return load(); });
+    });
+  }
+
+  // ---------- edit one item ----------
+  function field(label, ctl, o) { return App.field(label, ctl, o || {}); }
+  function openItem(p) {
+    B.P = p; PW.drawerTitle(B.drawer, p.catalogName || p.tallyName || p.code, p.code + (p.tallyName ? ' · Tally: ' + p.tallyName : ''));
+    var f = {
+      catalog: h('input', { class: 'inp', type: 'text', maxlength: 120, value: p.catalogName, placeholder: 'Name as shown to customers' }),
+      group: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.group, list: 'pw-dl-groups' }),
+      pcs: h('input', { class: 'inp', type: 'number', min: 1, step: 1, value: p.pcs }),
+      price: h('input', { class: 'inp', type: 'number', min: 0, step: '0.01', value: p.listPrice, placeholder: 'Rs per piece, before GST' }),
+      gst: h('input', { class: 'inp', type: 'number', min: 0, max: 100, step: '0.01', value: p.gst, placeholder: '12' }),
+      hsn: h('input', { class: 'inp', type: 'text', maxlength: 8, value: p.hsn, placeholder: '4 to 8 digits' }),
+      type: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.productType, list: 'pw-dl-types' }),
+      material: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.material, list: 'pw-dl-materials' }),
+      size: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.size, list: 'pw-dl-sizes' }),
+      colour: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.colour, list: 'pw-dl-colours' }),
+      brand: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.brand, list: 'pw-dl-brands' }),
+      custom: h('input', { class: 'inp', type: 'text', maxlength: 120, value: p.customisation }),
+      photo: h('input', { class: 'inp', type: 'url', maxlength: 300, value: p.photoLink, placeholder: 'https://drive.google.com/…' })
+    };
+    var ver = PW.check('Details checked', p.verified);
+    var save = h('button', { type: 'button', class: 'btn primary', text: 'Save item' });
+    save.addEventListener('click', function () {
+      App.run(save, function () {
+        var pcs = App.num(f.pcs.value);
+        if (isNaN(pcs) || pcs < 1) { f.pcs.focus(); throw new Error('Pieces per set must be 1 or more.'); }
+        return App.api('prd.save', { code: p.code, catalogName: f.catalog.value, group: f.group.value, pcs: pcs, listPrice: f.price.value, gst: f.gst.value, hsn: f.hsn.value,
+          productType: f.type.value, material: f.material.value, size: f.size.value, colour: f.colour.value, brand: f.brand.value, customisation: f.custom.value, photoLink: f.photo.value })
+          .then(function () { return ver.get() !== p.verified ? App.api('prd.verify', { codes: [p.code], verified: ver.get() }) : null; })
+          .then(function () { App.toast('Saved ' + p.code, 'ok'); B.drawer.close(); return load(); });
+      });
+    });
+    App.clear(B.body);
+    B.body.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '1' }), h('h2', { text: 'Name and price' }))),
+      h('div', { class: 'grid' }, field('Catalog name', f.catalog, { cls: 'span2' }), field('Stock group', f.group), field('Pieces per set', f.pcs, { required: true, hint: h('span', { class: 'pw-note', text: 'Changing this changes how sets convert to pieces everywhere.' }) }),
+        field('List price (Rs / piece)', f.price), field('GST %', f.gst), field('HSN', f.hsn))));
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'What it is' }))),
+      h('div', { class: 'grid' }, field('Product type', f.type), field('Material', f.material), field('Size', f.size), field('Colour', f.colour), field('Brand', f.brand), field('Customisation', f.custom),
+        field('Picture link', f.photo, { cls: 'span2' }))));
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '3' }), h('h2', { text: 'Check' }))),
+      h('div', { class: 'pw-sum', style: 'margin-bottom:14px' }, h('div', null, h('span', { text: 'In warehouse' }), h('b', { text: App.fmtQty(p.wh) + ' pcs' })), h('div', null, h('span', { text: 'Available to sell' }), h('b', { text: p.avail === '' ? '–' : App.fmtQty(p.avail) + ' pcs' }))),
+      ver.el, p.verified && p.verifiedBy ? h('p', { class: 'pw-note', style: 'margin:6px 0 0', text: 'Checked by ' + p.verifiedBy + (p.verifiedOn ? ' on ' + App.fmtDate(p.verifiedOn) : '') }) : null,
+      h('div', { class: 'actions' }, save)));
+    B.drawer.open();
+  }
+
+  // ---------- a brand-new item ----------
+  function newItem() {
+    var f = {
+      code: h('input', { class: 'inp', type: 'text', maxlength: 30, placeholder: 'Item code' }), name: h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'Name' }),
+      group: h('input', { class: 'inp', type: 'text', maxlength: 60, list: 'pw-dl-groups', placeholder: 'Stock group' }), pcs: h('input', { class: 'inp', type: 'number', min: 1, step: 1, value: 1 }),
+      gst: h('input', { class: 'inp', type: 'number', min: 0, max: 100, step: '0.01', placeholder: '12' })
+    };
+    App.modal({
+      title: 'New item', body: h('div', null, h('p', { class: 'mute', text: 'Items normally arrive from the Tally import. Add one here only when you need it before the next import; fill in the rest afterwards.' }),
+        h('div', { class: 'grid' }, App.field('Item code', f.code, { required: true }), App.field('Name (as in Tally)', f.name, { required: true }), App.field('Stock group', f.group), App.field('Pieces per set', f.pcs), App.field('GST %', f.gst))),
+      buttons: [{ label: 'Cancel' }, { label: 'Add item', kind: 'primary', onclick: function (api, btn) {
+        App.run(btn, function () {
+          if (!f.code.value.trim()) { f.code.focus(); throw new Error('Enter the item code.'); }
+          if (!f.name.value.trim()) { f.name.focus(); throw new Error('Enter the item name.'); }
+          return App.api('prod.create', { code: f.code.value.trim(), name: f.name.value, group: f.group.value, pcs: f.pcs.value, gst: f.gst.value }).then(function (r) {
+            api.close(); App.toast('Added ' + r.code + ' - now fill in its details', 'ok'); B.filter = 'All'; B.chips.set('All'); B.search = r.code; B.sel = {};
+            return load().then(function () { var p = B.rows.filter(function (x) { return x.code === r.code; })[0]; if (p) openItem(p); });
+          });
+        });
+      } }]
+    });
+  }
+
+  App.register('products', 'Products', { init: init, show: function () { load(); } });
+})();
+</script>
+# ===== END OF ProductsBoard =====
+
+##############################################################################
+# FILE 24 of 25 :  UsersBoard    [HTML file]   NEW (Admin)
+# first line of this file is:  <script>
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+<script>
+/* UsersBoard.html - Admin: who can use the app, and as what. The role decides which department opens for them
+   (Sales, Procurement, Warehouse, Accounts); an Admin can open all of them. You cannot remove or demote yourself, and
+   there is always at least one Admin. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var B = { f: {}, rows: [], roles: [], counts: {}, search: '', seq: 0, orig: '', listBox: null, countBox: null, title: null, saveBtn: null, cancelBtn: null, roleBox: null };
+
+  function init(root) {
+    var f = B.f;
+    f.email = h('input', { class: 'inp', type: 'email', maxlength: 120, placeholder: 'name@gmail.com' });
+    f.name = h('input', { class: 'inp', type: 'text', maxlength: 80 });
+    f.role = h('select', { class: 'inp' });
+    B.saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Add person' });
+    B.cancelBtn = h('button', { type: 'button', class: 'btn', text: 'Cancel edit', hidden: true, onclick: reset });
+    B.saveBtn.addEventListener('click', function () { App.run(B.saveBtn, save); });
+    B.title = h('h2', { text: 'Add a person' });
+    B.roleBox = h('div', { class: 'pw-note', style: 'margin-top:8px' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Users' }), h('p', { text: 'The people who can open Hospi Ops. Use the Google email they sign in with.' }))));
+    root.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, B.title),
+      h('div', { class: 'grid' }, App.field('Google email', f.email, { required: true }), App.field('Name', f.name, { required: true }), App.field('Role', f.role, { required: true })), B.roleBox,
+      h('div', { class: 'actions' }, B.saveBtn, B.cancelBtn)));
+    var search = PW.search('Search name, email, role…', 'Search users', function (v) { B.search = v; render(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    root.appendChild(h('div', { style: 'margin-top:22px' }, h('div', { class: 'toolbar' }, h('h2', { text: 'Everyone' }), h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+    f.role.addEventListener('change', roleNote);
+  }
+  function roleNote() {
+    var r = B.f.role.value, txt = { Admin: 'Opens every department and can manage users, products and locations.', Sales: 'Opens Sales: leads, requirements, quotes and orders.',
+      Procurement: 'Opens Procurement: purchase queue, purchase orders and suppliers.', Warehouse: 'Opens Warehouse: receiving, put-away, dispatch, stock and audit counts.',
+      Accounts: 'Opens Accounts: order receipts, purchase receipts, payments and the review of audit counts.' }[r] || '';
+    B.roleBox.textContent = txt;
+  }
+  function reset() {
+    B.orig = ''; B.f.email.value = ''; B.f.name.value = ''; B.f.email.disabled = false;
+    if (B.roles.length) B.f.role.value = B.roles.indexOf('Sales') >= 0 ? 'Sales' : B.roles[0];
+    B.title.textContent = 'Add a person'; B.saveBtn.textContent = 'Add person'; B.cancelBtn.hidden = true; roleNote();
+  }
+  function edit(u) {
+    B.orig = u.email; B.f.email.value = u.email; B.f.name.value = u.name; B.f.email.disabled = u.you;
+    B.f.role.value = u.valid ? u.role : B.f.role.value;
+    B.title.textContent = 'Edit ' + u.name; B.saveBtn.textContent = 'Save changes'; B.cancelBtn.hidden = false; roleNote();
+    B.f.name.focus(); window.scrollTo(0, 0);
+  }
+  function save() {
+    var f = B.f;
+    if (!f.email.value.trim()) { f.email.focus(); throw new Error('Enter the Google email.'); }
+    if (!f.name.value.trim()) { f.name.focus(); throw new Error('Enter the name.'); }
+    return App.api('usr.save', { originalEmail: B.orig, email: f.email.value, name: f.name.value, role: f.role.value }).then(function () {
+      App.toast('Saved ' + f.name.value.trim(), 'ok'); reset(); return load();
+    });
+  }
+  function remove(u) {
+    App.confirm({ title: 'Remove ' + u.name, message: u.name + ' (' + u.email + ') will no longer be able to open Hospi Ops. Their past work stays.', ok: 'Remove', danger: true }).then(function (yes) {
+      if (!yes) return null;
+      return App.api('usr.delete', { email: u.email }).then(function () { App.toast(u.name + ' removed', 'ok'); if (B.orig === u.email) reset(); return load(); }).catch(function (e) { App.toast(e.message, 'err'); });
+    });
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('usr.list').then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.counts = d.counts;
+      if (!B.roles.length) {
+        B.roles = d.roles; d.roles.forEach(function (r) { B.f.role.appendChild(h('option', { value: r, text: r })); });
+        B.f.role.value = d.roles.indexOf('Sales') >= 0 ? 'Sales' : d.roles[0]; roleNote();
+      }
+      render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'users', e); } });
+  }
+  function render() {
+    var q = B.search.toLowerCase(), rows = B.rows.filter(function (u) { return !q || [u.name, u.email, u.role].join(' ').toLowerCase().indexOf(q) >= 0; });
+    B.countBox.textContent = rows.length + (rows.length === 1 ? ' person' : ' people') + ' · ' + B.roles.map(function (r) { return B.counts[r] + ' ' + r; }).join(', ');
+    var cols = [
+      { h: 'Person', f: function (u) { return h('div', { class: 'who2' }, h('i', { text: App.initials(u.name) }), h('div', null, h('b', { text: u.name }), u.you ? ' ' : null, u.you ? App.badge('You', 'blue') : null, h('span', { class: 'sub', text: u.email }))); } },
+      { h: 'Role', f: function (u) { return u.valid ? App.badge(u.role, u.role === 'Admin' ? 'blue' : 'green') : [App.badge(u.role || 'No role', 'red'), h('span', { class: 'sub late', text: 'cannot sign in' })]; } },
+      { h: 'Opens', f: function (u) { return u.depts.length ? u.depts.join(', ') : h('span', { class: 'dash', text: '–' }); } },
+      { h: '', cls: 'acts', f: function (u) {
+          var out = [h('button', { type: 'button', class: 'btn sm', text: 'Edit', onclick: function () { edit(u); } })];
+          if (!u.you) out.push(' ', h('button', { type: 'button', class: 'btn sm danger', text: 'Remove', onclick: function () { remove(u); } }));
+          return out; } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, rows, 'No users found.'));
+  }
+  App.register('users', 'Users', { init: init, show: function () { load(); } });
+})();
+</script>
+# ===== END OF UsersBoard =====
+
+##############################################################################
+# FILE 25 of 25 :  LocationsBoard    [HTML file]   NEW (Admin)
+# first line of this file is:  <script>
+# ----- paste everything BELOW this line, up to the END marker -----
+##############################################################################
+<script>
+/* LocationsBoard.html - Admin: the shelves and zones stock can be put on. A location code never changes once it exists (stock, orders and
+   audit counts refer to it): to retire a shelf, move its stock away and stop using it. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var B = { f: {}, rows: [], search: '', seq: 0, editing: '', listBox: null, countBox: null, title: null, saveBtn: null, cancelBtn: null };
+
+  function init(root) {
+    var f = B.f;
+    f.code = h('input', { class: 'inp', type: 'text', maxlength: 30, placeholder: 'FL2-ZB-S2' });
+    f.floor = h('input', { class: 'inp', type: 'text', maxlength: 10, placeholder: '2' });
+    f.zone = h('input', { class: 'inp', type: 'text', maxlength: 20, placeholder: 'B' });
+    f.shelf = h('input', { class: 'inp', type: 'text', maxlength: 20, placeholder: 'S2' });
+    f.desc = h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'Floor 2, Zone B, Shelf 2' });
+    B.saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Add location' });
+    B.cancelBtn = h('button', { type: 'button', class: 'btn', text: 'Cancel edit', hidden: true, onclick: reset });
+    B.saveBtn.addEventListener('click', function () { App.run(B.saveBtn, save); });
+    B.title = h('h2', { text: 'Add a location' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Locations' }), h('p', { text: 'Where stock can be put. The warehouse picks one of these on put-away, dispatch and audit counts.' }))));
+    root.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, B.title),
+      h('div', { class: 'grid' }, App.field('Location code', f.code, { required: true, hint: h('span', { class: 'pw-note', text: 'Letters, digits and - only. Cannot be changed later.' }) }), App.field('Floor', f.floor), App.field('Zone', f.zone), App.field('Shelf', f.shelf), App.field('Description', f.desc, { cls: 'span2' })),
+      h('div', { class: 'actions' }, B.saveBtn, B.cancelBtn)));
+    var search = PW.search('Search code, zone, description…', 'Search locations', function (v) { B.search = v; render(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    root.appendChild(h('div', { style: 'margin-top:22px' }, h('div', { class: 'toolbar' }, h('h2', { text: 'All locations' }), h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+  }
+  function reset() {
+    B.editing = ''; Object.keys(B.f).forEach(function (k) { B.f[k].value = ''; }); B.f.code.disabled = false;
+    B.title.textContent = 'Add a location'; B.saveBtn.textContent = 'Add location'; B.cancelBtn.hidden = true;
+  }
+  function edit(l) {
+    B.editing = l.code; B.f.code.value = l.code; B.f.code.disabled = true; B.f.floor.value = l.floor; B.f.zone.value = l.zone; B.f.shelf.value = l.shelf; B.f.desc.value = l.desc;
+    B.title.textContent = 'Edit ' + l.code; B.saveBtn.textContent = 'Save changes'; B.cancelBtn.hidden = false; B.f.desc.focus(); window.scrollTo(0, 0);
+  }
+  function save() {
+    var f = B.f;
+    if (!f.code.value.trim()) { f.code.focus(); throw new Error('Enter the location code.'); }
+    return App.api('loc.save', { code: f.code.value, floor: f.floor.value, zone: f.zone.value, shelf: f.shelf.value, desc: f.desc.value, isNew: !B.editing }).then(function (r) {
+      App.toast('Saved ' + r.code, 'ok'); reset(); return load();
+    });
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('loc.admin').then(function (rows) { if (seq !== B.seq) return; B.rows = rows; render(); })
+      .catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'locations', e); } });
+  }
+  function render() {
+    var q = B.search.toLowerCase(), rows = B.rows.filter(function (l) { return !q || [l.code, l.floor, l.zone, l.shelf, l.desc].join(' ').toLowerCase().indexOf(q) >= 0; });
+    B.countBox.textContent = rows.length + (rows.length === 1 ? ' location' : ' locations');
+    var cols = [
+      { h: 'Code', f: function (l) { return h('b', { text: l.code }); } },
+      { h: 'Floor', f: function (l) { return l.floor || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Zone', f: function (l) { return l.zone || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Shelf', f: function (l) { return l.shelf || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Description', f: function (l) { return l.desc || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Stock here', cls: 'num', f: function (l) { return l.pcs ? [App.fmtQty(l.pcs) + ' pcs', h('span', { class: 'sub', text: l.items + (l.items === 1 ? ' item' : ' items') })] : h('span', { class: 'dash', text: 'empty' }); } },
+      { h: '', cls: 'acts', f: function (l) { return h('button', { type: 'button', class: 'btn sm', text: 'Edit', onclick: function () { edit(l); } }); } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, rows, 'No locations found.'));
+  }
+  App.register('locations', 'Locations', { init: init, show: function () { load(); } });
+})();
+</script>
+# ===== END OF LocationsBoard =====
+
+##############################################################################
 # OPTIONAL SALES FIX  (OrdersBoard-stage-fix.txt)
 ##############################################################################
 OPTIONAL FIX FOR YOUR EXISTING Sales file  OrdersBoard.html
@@ -3373,80 +5026,126 @@ REPLACE:
 ##############################################################################
 # README  (README.md)
 ##############################################################################
-# Hospi Ops: Procurement and Warehouse
+# Hospi Ops: Procurement, Warehouse, Accounts and Admin
 
-Adds two departments to the existing Sales app. Same web app, one URL per department:
+Adds four departments to the existing Sales app. Same web app, one URL per department:
 
 | URL | Who | Tabs |
 |---|---|---|
 | `…/exec` or `…/exec?dept=sales` | Sales | Leads, Requirements, Make Quote, Orders (unchanged) |
 | `…/exec?dept=procurement` | Procurement | Purchase queue, Purchase orders, Suppliers |
 | `…/exec?dept=warehouse` | Warehouse | Receiving, Put-away, Dispatch, Stock, Stock audit |
+| `…/exec?dept=accounts` | Accounts | Order receipts, Purchase receipts, Payments, Stock audit (review) |
+| `…/exec?dept=admin` | Admin | Overview, Products, Users, Locations |
 
-`Users` tab roles decide who can open what: **Admin** opens all three, **Sales / Procurement / Warehouse** open their own, **Accounts** opens the Warehouse page and sees only *Stock audit* (to review counts) until an Accounts department exists. The department menu in the header links between them.
+`Users` tab roles decide who can open what: **Admin** opens all five; **Sales / Procurement / Warehouse / Accounts** open their own department. Someone who types another department's URL simply gets their own. The department menu in the header links between the departments a person may open.
+
+> Change from the first version: **Accounts now has its own page.** Before, an Accounts user opened the Warehouse page and saw only *Stock audit*. They now open `?dept=accounts`, which still has *Stock audit* (reviewing counts) and adds the money screens. The Warehouse page is for the Warehouse role (and Admin) only.
 
 ## Files
 
-New: `Items.gs`, `Procurement.gs`, `Warehouse.gs`, `DeptShell.html`, `DeptStyles.html`, and the eight boards
-`ProcQueueBoard`, `PurchaseOrdersBoard`, `SuppliersBoard`, `ReceivingBoard`, `PutAwayBoard`, `DispatchBoard`, `StockBoard`, `AuditBoard` (`.html`).
+New server files: `Items.gs`, `Procurement.gs`, `Warehouse.gs`, `Accounts.gs`, `Admin.gs`.
+
+New HTML files: `DeptShell.html`, `DeptStyles.html` and the boards
+
+- Procurement: `ProcQueueBoard`, `PurchaseOrdersBoard`, `SuppliersBoard`
+- Warehouse: `ReceivingBoard`, `PutAwayBoard`, `DispatchBoard`, `StockBoard`, `AuditBoard` (also used by Accounts)
+- Accounts: `OrderReceiptsBoard`, `PurchaseReceiptsBoard`, `PaymentsBoard`
+- Admin: `OverviewBoard`, `ProductsBoard`, `UsersBoard`, `LocationsBoard`
 
 Changed (your files, with the edits marked `PW:` in the code):
 
-- `Config.gs`: new roles, `DEPARTMENTS`, PO/audit Drive folder settings, 8 new tables in `TABLES` and `REQUIRED_HEADERS`.
-- `Main.gs`: `doGet(e)` picks the department; `api()` checks each action's roles (an action with no roles is a Sales action; `'*'` = everyone; Admin always passes); `methods()` merges the new actions; `boot` skips the Sales-only quote number for other roles; `Auth` accepts the new roles.
+- `Config.gs`: roles, `DEPARTMENTS` (five), `PAYMENT_MODES`, PO/audit Drive folder settings, the new tables in `TABLES` and `REQUIRED_HEADERS` (including `Payments`).
+- `Main.gs`: `doGet(e)` picks the department; `api()` checks each action's roles (an action with no roles is a Sales action; `'*'` = everyone; an empty list `[]` = Admin only; Admin always passes); `methods()` merges the new actions; `boot` skips the Sales-only quote number for other roles and carries the payment modes.
 - `Index.html`: one template for all departments (title, department chip, menu, board sections and file list come from `Main.deptConfig`).
 
 **Not touched:** `Client.html`, `Styles.html`, the four Sales boards, and every other Sales `.gs` file. `DeptShell.html` loads right after `Client.html` and only wraps `App.go` (breadcrumb), `App.icon` (new icons) and `App.refreshAttn` (badges) on the non-Sales pages.
 
 ## Install
 
-1. Copy the new files into the Apps Script project and replace `Config.gs`, `Main.gs`, `Index.html` with the versions here (if you changed those since, re-apply the `PW:` edits instead).
+1. Copy the new files into the Apps Script project and replace `Config.gs`, `Main.gs`, `Index.html`, `DeptShell.html`, `DeptStyles.html` and `AuditBoard.html` with the versions here (if you changed `Config`/`Main`/`Index` since, re-apply the `PW:` edits instead).
 2. Do not copy the old kanban script (the file with `SHEET_NAME = 'Sales_Leads'`, `onOpen`, `showDashboard`) into the replica. It opens the `Index` template without `cfg`, so it no longer works with the shared page, and the Sales app does not use it.
-3. In the `Users` tab give people their role: `Procurement`, `Warehouse`, `Accounts` (spelled exactly).
-4. Optional but recommended: make one shared Drive folder each for PO PDFs and audit photos and paste the IDs into `PO_PDF_FOLDER_ID` / `AUDIT_PHOTO_FOLDER_ID` (otherwise each user's own Drive gets a `PO_PDFs` / `Audit Queue_Images` folder).
-5. Run `runDiagnostics` once. It now also checks the 8 new tabs and the extra Sales Orders / Order Lines columns (`Transport Booked`, `Transporter`, `LR No.`, `Pick From`, `Picked`, `Packed`, `Dispatched Qty`…).
+3. In the `Users` tab give people their role: `Procurement`, `Warehouse`, `Accounts`, `Sales`, `Admin` (spelled exactly). From now on Admin can also do this on the **Users** tab of the Admin page.
+4. Optional but recommended: make one shared Drive folder each for PO PDFs and audit photos and paste the IDs into `PO_PDF_FOLDER_ID` / `AUDIT_PHOTO_FOLDER_ID`.
+5. Run `runDiagnostics` once (or press *Run sheet check* on the Admin Overview). It checks every tab and column the app uses, including `Payments` and the billing columns on `Sales Orders` and `GRN`.
 6. Deploy as before (Execute as: user accessing the web app). Redeploy a new version.
 
 ## How it works
 
-**Procurement.** Sales requirements arrive in the Purchase queue (blank status). The purchase manager accepts or denies each one (`Requirements.Status`). *Accept* opens a pop-up where the supplier is chosen (or a new one added on the spot); choosing the supplier is what confirms the acceptance. Accepted items that are not on a PO yet are highlighted, and *Make PO* puts them on one. A PO is a draft until *Send*: sending sets `Status = Sent` (this is what makes it "On Order"), makes the PDF, and opens the goods receipt (GRN + one line per PO line, "Yet to receive") for the Warehouse. Removing a line from a draft, or deleting a draft, puts its requirement back in the queue. *Stock top-up* lets Procurement raise a need with no customer behind it; it joins the queue as awaiting decision like any other requirement.
+### Procurement
 
-**Warehouse, inward.** *Receiving*: count the delivery (pieces or sets), note damaged pieces, sticker, then *Mark as received* (this fills `Received Date`). An item that arrived but was not on the PO can be added. *Put-away*: choose a location and pieces per line; part put-away splits the line so the PO's `Open Sets` stays correct.
+Sales requirements arrive in the Purchase queue (blank status). The purchase manager accepts or denies each one (`Requirements.Status`). *Accept* opens a pop-up where the supplier is chosen (or a new one added on the spot); choosing the supplier is what confirms the acceptance. Accepted items that are not on a PO yet are highlighted, and *Make PO* puts them on one. A PO is a draft until *Send*: sending sets `Status = Sent` (this is what makes it "On Order"), makes the PDF, and opens the goods receipt (GRN + one line per PO line, "Yet to receive") for the Warehouse. Removing a line from a draft, or deleting a draft, puts its requirement back in the queue. *Stock top-up* lets Procurement raise a need with no customer behind it.
 
-**Warehouse, outward.** *Dispatch* follows the sheet's own `Stage (auto)`: pick (`Picked` + `Pick From`) → pack (`Packed`) → **book transport** (`Transport Booked` + `Transporter`) → dispatch (partial shipments allowed; `Dispatched Qty`, line `Dispatched`, and the order's `Status = Dispatched` when nothing is left).
+### Warehouse
 
-**Stock Movement is read-only for people.** The app writes it in exactly three places: put-away (+), dispatch (−), approved audit (`Audit adj`). *Stock* only reads it. A dispatch is refused if the ledger does not hold the pieces at the pick location.
+**Inward.** *Receiving*: count the delivery (pieces or sets), note damaged pieces, sticker, then *Mark as received* (this fills `Received Date`). An item that arrived but was not on the PO can be added. *Put-away*: choose a location and pieces per line; part put-away splits the line so the PO's `Open Sets` stays correct.
 
-**Audit.** Warehouse counts a shelf (item, location, pieces, optional photo). Accounts approves (the ledger is adjusted by the difference) or rejects (nothing changes). Admin can do both.
+**Outward.** *Dispatch* follows the sheet's own `Stage (auto)`: pick → pack → **book transport** → dispatch (partial shipments allowed; the order's `Status = Dispatched` when nothing is left).
+
+**Stock Movement is read-only for people.** The app writes it in exactly three places: put-away (+), dispatch (−), approved audit (`Audit adj.`). A dispatch is refused if the ledger does not hold the pieces at the pick location.
+
+**Audit.** Warehouse counts a shelf (item, location, pieces, optional photo). Accounts approves (the ledger is adjusted by the difference) or rejects (nothing changes).
+
+### Accounts
+
+**Order receipts.** One row per sales order. *To invoice* lists orders that have no invoice yet (dispatched ones first). Make the invoice in Tally, then open the order and enter the **Tally voucher no., invoice date, invoice amount** and (optionally) the **due date**; it is suggested from the order's payment terms ("30 days credit" → invoice date + 30 days; "100% advance" / "After delivery" → the invoice date). Saving writes `Tally Voucher No.`, `Invoice Date`, `Invoice Amount`, `Due Date` and sets `Status = Billing done` (unless the order is already Dispatched or Cancelled). Then *Receive money* adds a row to `Payments` (Direction *Received*, Ref Type *Order*). A part payment is another receipt. *To collect* lists invoiced orders with a balance, **overdue ones first**; *Paid* lists the settled ones.
+  - An order is worth its **Invoice Amount** once billed, before that its value including GST (from the order lines). Received and Balance are worked out from `Payments`.
+  - When the balance reaches zero the app fills `Payment Cleared On` with the date of the last receipt; if a correction makes it unpaid again, it is cleared.
+  - Receiving more than the balance asks for confirmation. A cancelled order can only take a *refund*.
+
+**Purchase receipts.** One row per delivery (GRN). When goods are received, *To bill* lists it. Enter the supplier's bill: **Bill amount, Tally purchase voucher no.** (and, if needed, correct the supplier invoice no./date). The screen shows the value of the order and of the goods received, and warns about damaged pieces so credit can be asked from the supplier. *Pay supplier* adds a `Payments` row (Direction *Paid*, Ref Type *GRN*). A payment can be made before the goods arrive (an advance) or before the bill is entered. The due date comes from the PO's payment terms, counted from the supplier invoice date (or the received date). *To pay* lists open bills with overdue ones first.
+
+**Payments.** The whole ledger, newest first: money in and money out, with totals, a date range and a *Download* (CSV for a spreadsheet). *Correct* changes the date, amount, mode, reference or note of an entry (what it was for cannot change). Only an **Admin can delete** a payment. Nothing else ever overwrites a payment.
+
+**Stock audit.** Accounts reviews the counts here (approve / reject), the same screen the warehouse counts on.
+
+### Admin
+
+- **Overview.** A card per department (what is waiting) and a *Needs attention* list: purchase orders past their delivery date, accepted requirements past their need-by date, orders dispatched but not invoiced, overdue customer payments and supplier bills, deliveries received over a week ago and not billed, stock counts waiting over a week, items promised beyond the stock, books-vs-warehouse differences, items in the warehouse without GST or HSN, roles nobody has, users whose role the app does not know. *Run sheet check* is the `runDiagnostics` check for every tab. Read-only: each item links to the department that owns it.
+- **Products.** The product master: catalog name, stock group, pieces per set, list price, GST %, HSN, type, material, size, colour, brand, customisation, picture link, and a *Details checked* mark (`Verified`, `Verified_By`, `Verified_On`). *Needs details* lists items missing a catalog name, HSN, GST or list price. Tick several and *Mark as checked* in one go. *New item* adds a product before the next Tally import. The Tally name and item code come from the import and are not edited; the stock numbers are formulas and are only shown.
+- **Users.** Add, edit and remove people and set their role (the `Users` tab). Emails are stored in lower case. You cannot remove or demote yourself and there is always at least one Admin. A person whose role the app does not know is flagged ("cannot sign in").
+- **Locations.** Add locations and edit floor, zone, shelf and description. A location **code never changes** once it exists (stock, orders and counts refer to it); the `QR Code` column is not touched. The list shows how much stock sits at each location.
 
 ## Assumptions (confirmed)
 
 - `Damaged Qty` is in **pieces**; PO `Rate` is **Rs per piece, GST-exclusive** (same as the Prices convention).
 - Receiving and put-away quantities are stored in **sets** (fractions allowed); the ledger is in **pieces**.
 - A GRN is created when a PO is **sent**, not when it is drafted.
-- Dispatch requires transport to be booked first (the sheet only reaches "Ready to dispatch" after that).
-- Lines without an item code can be dispatched, but no stock is reduced for them (the ledger needs an item code).
-- A PO does not need a requirement behind it: in the PO builder, *+ Add item* adds any product (or a brand-new item name) for the chosen supplier. Requirements are only a shortcut (they appear under the supplier and can be added with one click).
+- Dispatch requires transport to be booked first.
+- A PO does not need a requirement behind it: in the PO builder, *+ Add item* adds any product (or a brand-new item name).
+
+Assumptions made for Accounts and Admin (tell me if the business works differently):
+
+- A bill needs both the Tally voucher number and the amount; an order invoice needs the voucher number, date and amount.
+- Billing sets `Sales Orders.Status = Billing done`. Dispatch does not wait for billing.
+- Customer receipts are `Direction = Received / Ref Type = Order`; supplier payments are `Paid / GRN`. A *refund* is the opposite direction on the same reference.
+- A payment date cannot be in the future; an invoice date cannot be in the future.
+- Payment terms are read from text: `N days credit`, `N months credit`, `… advance`, `After delivery`. Anything else gives no suggested due date (it can still be typed in for an order).
+- Admin-only: users, products, locations. Warehouse people cannot edit locations from the app (no screen for it); Procurement cannot edit products.
+
+## Typed (table) columns in the sheet
+
+Several columns are typed Sheets "table" columns (dates, drop-downs, numbers). The sheet refuses a number format on them, so the app never writes a JavaScript Date into `Req Date`, `Dispatch Date`, `Payment Date`, `Invoice Date` or `Due Date`: it writes the date as its serial number (`Rows.serial` in `Items.gs`), and the column shows it in its own date format. Drop-downs are written with exactly the allowed values (`Done` / `Left` for `Stickered`, `Audit adj.` for the audit movement type, `Received` / `Paid`, `Order` / `GRN` and the five modes for `Payments`). `Db.gs` must keep its `setFormat_` guard (try/catch around `setNumberFormat`).
 
 ## Noticed in the Sales code (not changed)
 
-- `OrdersBoard`: `STAGES` / `stageIdx` did not know `To pack` or `Ready to dispatch`, which the sheet produces, so those orders showed step 1 in the progress bar. The five edits that fix it are in `OrdersBoard-stage-fix.txt` (apply them to your existing file). `Part dispatched` is never produced by the sheet.
-- Product list, parties and the item pickers are reused as they are.
+- `OrdersBoard`: `STAGES` / `stageIdx` did not know `To pack` or `Ready to dispatch`, which the sheet produces, so those orders showed step 1 in the progress bar. The five edits that fix it are in `OrdersBoard-stage-fix.txt`.
 
 ## Checked, and what still needs a real deployment
 
-Checked locally against a mock of the sheet that re-implements the `(auto)` formulas (PO/SO open sets, order stage, warehouse qty, reserved, audit system qty): 158 server checks (roles, PO lifecycle, receive, split put-away, dispatch incl. partial and stock guard, audit approve/reject) and a Chromium run of the real pages for every role (desktop and phone width).
+Checked locally against a mock of the sheet that re-implements the `(auto)` formulas and enforces the typed-column rules (no number formats on typed columns, Dates refused in typed date columns, drop-down values): 177 server checks for Procurement and Warehouse, 230 for Accounts and Admin (roles, billing, part and over payments, refunds, cancelled orders, advances, due and overdue dates, `Payment Cleared On`, corrections and deletes, GRN bills, ledger totals and filters, users and the last-Admin rules, locations, products, overview), and Chromium runs of the real pages for every role, at desktop and phone width.
 
-Not verifiable outside Google, so test once after deploying: PDF creation and Drive folders (PO PDF, audit photo), `LockService`, and sign-in by email. Suggested smoke test: as Procurement accept a requirement → make and send a PO → open its PDF; as Warehouse receive it, put it away, then pick/pack/book/dispatch a Sales order; add an audit count; as Accounts approve it.
+Not verifiable outside Google, so test once after deploying: PDF creation and Drive folders, `LockService`, and sign-in by email. Suggested smoke test: as Procurement accept a requirement → make and send a PO; as Warehouse receive it and put it away; as Accounts open *Purchase receipts*, enter the bill and pay part of it; as Sales convert a quote to an order; as Accounts open *Order receipts*, invoice it and receive a part payment; check the `Payments` tab and `Payment Cleared On` after the second payment; as Admin open *Overview* and *Run sheet check*.
 
 ## If something looks wrong
 
-- **A tab is missing, or code is printed on the page.** A board file lost its first line (`<script>`) or its last line (`</script>`) when it was pasted. The page now shows a red message naming the tab that did not load. Open that file in Apps Script and check the first and last line. Every board file starts with `<script>` and ends with `</script>`; `DeptStyles` starts with `<style>` and ends with `</style>`.
-- **A button seems to do nothing.** Lists read the sheet when opened; the first open after a few minutes can take a few seconds on a large Products tab. The purchase order form now opens at once and fills in; if something genuinely fails, a red message appears at the bottom right. Tell me what it says.
+- **A tab is missing, or code is printed on the page.** A board file lost its first line (`<script>`) or its last line (`</script>`) when it was pasted. The page shows a red message naming the tab that did not load. Open that file in Apps Script and check the first and last line. Every board file starts with `<script>` and ends with `</script>`; `DeptStyles` starts with `<style>` and ends with `</style>`.
+- **"You can't set the number format of cells in a typed column".** A date was written as a Date object into a typed date column. Check that `Items.gs` has `Rows.serial` and that the code writes dates with it (see above). If it appears on the Sales side, use `Rows.serial(U.isoToday())` for `Req Date` in `ReqApi.create`.
+- **"Your role (…) cannot do this."** The person's role is not allowed that action. Roles are on the `Users` tab.
+- **A button seems to do nothing.** Lists read the sheet when opened; the first open after a few minutes can take a few seconds on a large Products tab. If something genuinely fails, a red message appears at the bottom right.
 
 ## Limits / next steps
 
-- Each action re-reads the tabs it needs. The Products tab (the biggest) is cached for 2 minutes and the cache is dropped after every write, so a new item is available straight away and an item added by hand in the sheet is found even before the 2 minutes are up.
-- Tab bubbles carry the counts (Procurement: requirements awaiting decision and draft POs; Warehouse: deliveries to receive, lines to put away, orders to ship, counts to review). The bell only knows the Sales-style items, so it works on the Procurement page (requirements awaiting decision) and stays empty on the Warehouse page.
-- Accounts' own screens (purchase receipts, order receipts) are not built.
-
+- Each action re-reads the tabs it needs. The Products tab is cached for 2 minutes and the cache is dropped after every write. The Admin Overview reads about a dozen tabs, so it takes a few seconds.
+- Tab bubbles carry the counts (Procurement: requirements awaiting decision and draft POs; Warehouse: deliveries to receive, lines to put away, orders to ship, counts to review; Accounts: orders to invoice + overdue, deliveries to bill + overdue, counts to review; Admin: items that look wrong). The bell only knows the Sales-style items, so it works on the Procurement page and stays empty elsewhere.
+- Not built: GST/e-invoice generation, bank reconciliation, credit notes (record a refund or correct the bill amount instead), deleting locations or users' history, import of Tally stock.

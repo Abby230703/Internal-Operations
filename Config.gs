@@ -5,9 +5,9 @@
  * Keep this file plain data: nothing here may call code from other files.
  *
  * CHANGED for Procurement + Warehouse (search "PW:" to see every addition):
- *   - ALLOWED_ROLES / SALES_ROLES / DEPARTMENTS
- *   - PO_PDF_* and AUDIT_PHOTO_* settings
- *   - new tables in TABLES and REQUIRED_HEADERS
+ *   - ALLOWED_ROLES / SALES_ROLES / DEPARTMENTS (Sales, Procurement, Warehouse, Accounts, Admin)
+ *   - PO_PDF_* and AUDIT_PHOTO_* settings, PAYMENT_MODES
+ *   - new tables in TABLES and REQUIRED_HEADERS (incl. Payments)
  */
 
 var CONFIG = {
@@ -21,9 +21,8 @@ var CONFIG = {
   // PW: a server action that does not name its own roles is a Sales action (Admin can always do everything).
   SALES_ROLES: ['Sales'],
 
-  // PW: one web-app URL per department: ...?dept=sales | procurement | warehouse.
+  // PW: one web-app URL per department: ...?dept=sales | procurement | warehouse | accounts | admin.
   // roles = who may open it (Admin may open all). boards = board names, in tab order; includes = HTML files to load.
-  // Accounts has no screens of its own yet: it opens the Warehouse app, where it reviews audit counts.
   DEPARTMENTS: {
     sales: {
       label: 'Sales', initial: 'S', sub: 'Leads, requirements, quotes, orders', roles: ['Sales'],
@@ -36,11 +35,19 @@ var CONFIG = {
       includes: ['ProcQueueBoard', 'PurchaseOrdersBoard', 'SuppliersBoard']
     },
     warehouse: {
-      label: 'Warehouse', initial: 'W', sub: 'Receiving, put-away, dispatch, stock, audit', roles: ['Warehouse', 'Accounts'],
+      label: 'Warehouse', initial: 'W', sub: 'Receiving, put-away, dispatch, stock, audit', roles: ['Warehouse'],
       boards: ['receiving', 'putaway', 'dispatch', 'stock', 'audit'],
-      includes: ['ReceivingBoard', 'PutAwayBoard', 'DispatchBoard', 'StockBoard', 'AuditBoard'],
-      // Accounts only sees these boards (it reviews audit counts)
-      boardsFor: { Accounts: ['audit'] }
+      includes: ['ReceivingBoard', 'PutAwayBoard', 'DispatchBoard', 'StockBoard', 'AuditBoard']
+    },
+    accounts: {
+      label: 'Accounts', initial: 'A', sub: 'Order receipts, purchase receipts, payments, audit review', roles: ['Accounts'],
+      boards: ['orderpay', 'billpay', 'payments', 'audit'],
+      includes: ['OrderReceiptsBoard', 'PurchaseReceiptsBoard', 'PaymentsBoard', 'AuditBoard']      // AuditBoard is shared with Warehouse
+    },
+    admin: {
+      label: 'Admin', initial: 'Ad', sub: 'Overview, products, users, locations', roles: ['Admin'],
+      boards: ['overview', 'products', 'users', 'locations'],
+      includes: ['OverviewBoard', 'ProductsBoard', 'UsersBoard', 'LocationsBoard']
     }
   },
 
@@ -48,6 +55,9 @@ var CONFIG = {
   QUOTE_VALID_DAYS: 7,           // default validity when "Valid until" is left blank
   FOLLOWUP_DEFAULT_DAYS: 7,      // default "next follow-up" for a new lead
   MAX_ROWS: 300,                 // max rows a board loads at once
+
+  // PW: how money was paid or received (the Mode drop-down in the Payments tab)
+  PAYMENT_MODES: ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other'],
 
   // PW: Procurement numbering
   PO_PREFIX: 'AE/PO/',
@@ -149,7 +159,9 @@ var TABLES = {
   grn:           { sheet: 'GRN',            headerRow: 1, key: 'GRN ID' },
   grnLines:      { sheet: 'GRN Lines',      headerRow: 1, key: 'Line ID' },
   movement:      { sheet: 'Stock Movement', headerRow: 1, key: 'Move ID' },
-  audit:         { sheet: 'Audit Counts',   headerRow: 1, key: 'Count ID' }
+  audit:         { sheet: 'Audit Counts',   headerRow: 1, key: 'Count ID' },
+  // PW: Accounts
+  payments:      { sheet: 'Payments',       headerRow: 1, key: 'Payment ID' }
 };
 
 /** Headers the code relies on. runDiagnostics() checks them against the sheet. */
@@ -167,23 +179,26 @@ var REQUIRED_HEADERS = {
                'Offer Price', 'GST %', 'Req ID', 'Photo Link'],
   orders: ['Order ID', 'Order No.', 'Order Date', 'Customer', 'Salesman', 'Status', 'Payment Terms', 'Delivery Terms',
            'Proforma Invoice PDF', 'Created At', 'Tally Voucher No.', 'Dispatch Date', 'Stage (auto)',
-           'Dispatched By', 'Transport Booked', 'Transporter', 'LR No.'],
+           'Dispatched By', 'Transport Booked', 'Transporter', 'LR No.',
+           'Invoice Date', 'Due Date', 'Payment Cleared On', 'Invoice Amount'],
   orderLines: ['Line ID', 'Req ID', 'Order ID', 'Item_Code', 'Description', 'Pcs / Set', 'No. of set', 'Offer Price', 'GST %',
                'Pick From', 'Picked', 'Packed', 'Dispatched', 'Dispatch Date', 'Dispatched By', 'Dispatched Qty', 'Open Sets (auto)'],
-  products: ['Item Code', 'Tally Name', 'Catalog Name', 'Pcs / Set', 'List Price', 'GST_Pct', 'Photo_link'],
+  products: ['Item Code', 'Tally Name', 'Catalog Name', 'Pcs / Set', 'List Price', 'GST_Pct', 'Photo_link',
+             'Stock Group', 'HSN', 'Verified', 'Verified_By', 'Verified_On'],
   // PW
-  locations: ['Location Code', 'Description'],
+  locations: ['Location Code', 'Floor', 'Zone', 'Shelf', 'Description'],
   suppliers: ['Supplier ID', 'Supplier Company Name', 'Contact_Name', 'WhatsApp', 'Email', 'GSTIN', 'City', 'Address', 'Product_Categories'],
   purchase: ['Purchase ID', 'Purchase No', 'Purchase Date', 'Supplier Company Name', 'Delivery Date', 'Payment Terms', 'Status', 'PO PDF',
              'Created By', 'Created At'],
   purchaseLines: ['Line ID', 'Req ID', 'Purchase ID', 'Item Code', 'Description', 'Supplier Item Code', 'Supplier Item Name', 'Pcs / Set',
                   'No. of Set', 'Rate', 'GST %', 'Supplier ID (auto)', 'Open Sets (auto)'],
   grn: ['GRN ID', 'GRN No', 'Purchase ID', 'Supplier', 'Supplier Invoice No', 'Invoice Date', 'Received Date', 'No. of cartons received',
-        'Received By', 'Status'],
+        'Received By', 'Status', 'Bill Amount', 'Tally Purchase Voucher No.'],
   grnLines: ['Line ID', 'GRN ID', 'Purchase Line ID', 'Item Code', 'Description', 'Supplier item code', 'Expected pcs / set',
              'Expected No. of Sets', 'Received pcs / set', 'Received No. of Sets', 'Damaged Qty', 'Stickered', 'Stickered Qty',
              'Put Away', 'Put Away By', 'Put_Qty', 'Location'],
   movement: ['Move ID', 'Ref ID', 'Moved At', 'Item Code', 'Qty', 'Location', 'Type', 'Moved By'],
   audit: ['Count ID', 'Counted At', 'Item Code', 'Description', 'Location', 'Counted Qty', 'Photo', 'Counted By', 'Status',
-          'Reviewed By', 'Reviewed On', 'System Qty (auto)', 'Variance (auto)']
+          'Reviewed By', 'Reviewed On', 'System Qty (auto)', 'Variance (auto)'],
+  payments: ['Payment ID', 'Payment Date', 'Direction', 'Ref Type', 'Ref ID', 'Amount', 'Mode', 'Reference No.', 'Entered By', 'Notes']
 };

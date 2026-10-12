@@ -81,8 +81,8 @@ var Main = {
       'orders.pdf':           [OrdersApi.pdf, true],
       'orders.cancel':        [OrdersApi.cancel, true]
     };
-    // PW: Procurement and Warehouse actions (Procurement.gs, Warehouse.gs)
-    [ProcApi.routes(), WhApi.routes()].forEach(function (m) {
+    // PW: Procurement, Warehouse, Accounts and Admin actions (Procurement.gs, Warehouse.gs, Accounts.gs, Admin.gs)
+    [ProcApi.routes(), WhApi.routes(), AcctApi.routes(), AdminApi.routes()].forEach(function (m) {
       Object.keys(m).forEach(function (k) { all[k] = m[k]; });
     });
     return all;
@@ -97,7 +97,7 @@ var Main = {
   },
 
   // ---------- PW: departments ----------
-  /** Departments this role may open. Admin may open all three. */
+  /** Departments this role may open. Admin may open all of them. */
   allowedDepts: function (role) {
     return Object.keys(CONFIG.DEPARTMENTS).filter(function (k) {
       return role === 'Admin' || CONFIG.DEPARTMENTS[k].roles.indexOf(role) >= 0;
@@ -130,7 +130,9 @@ var Main = {
   boardOf: function (file) {
     return { LeadsBoard: 'leads', RequirementsBoard: 'requirements', QuoteBoard: 'quote', OrdersBoard: 'orders',
              ProcQueueBoard: 'requirements', PurchaseOrdersBoard: 'purchase', SuppliersBoard: 'suppliers',
-             ReceivingBoard: 'receiving', PutAwayBoard: 'putaway', DispatchBoard: 'dispatch', StockBoard: 'stock', AuditBoard: 'audit' }[file];
+             ReceivingBoard: 'receiving', PutAwayBoard: 'putaway', DispatchBoard: 'dispatch', StockBoard: 'stock', AuditBoard: 'audit',
+             OrderReceiptsBoard: 'orderpay', PurchaseReceiptsBoard: 'billpay', PaymentsBoard: 'payments',
+             OverviewBoard: 'overview', ProductsBoard: 'products', UsersBoard: 'users', LocationsBoard: 'locations' }[file];
   },
 
   boot: function (a, user) {
@@ -148,7 +150,8 @@ var Main = {
       pocDefault: poc,
       lists: {
         leadSources: CONFIG.LEAD_SOURCES, leadPocs: CONFIG.LEAD_POCS, leadStatuses: CONFIG.LEAD_STATUSES,
-        paymentTerms: CONFIG.PAYMENT_TERMS, deliveryTerms: CONFIG.DELIVERY_TERMS, lostReasons: CONFIG.LOST_REASONS
+        paymentTerms: CONFIG.PAYMENT_TERMS, deliveryTerms: CONFIG.DELIVERY_TERMS, lostReasons: CONFIG.LOST_REASONS,
+        paymentModes: CONFIG.PAYMENT_MODES
       }
     };
     // PW: the next quote number is only needed on the Sales screens (it reads the Quotations and Orders tabs)

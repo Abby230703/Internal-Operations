@@ -1,0 +1,160 @@
+<script>
+/* ProductsBoard.html - Admin: the product master. Item code and Tally name come from the Tally import; everything else (catalog name,
+   group, pieces per set, price, GST, HSN, type, material, size, colour, brand, picture link) is kept here. Tick "Details checked" once an
+   item is complete. The stock numbers are formulas in the sheet and are only shown, never changed. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var LABELS = ['Needs details', 'Unverified', 'All'];
+  var B = { filter: 'Needs details', search: '', seq: 0, rows: [], d: null, lists: {}, sel: {}, listBox: null, countBox: null, chips: null, bar: null, barTxt: null, drawer: null, body: null, P: null, all: null };
+
+  function init(root) {
+    B.chips = App.seg({ cls: 'chips-s', label: 'Filter items', value: B.filter, options: LABELS.map(function (l) { return { v: l, label: l }; }), onChange: function (v) { B.filter = v; B.sel = {}; load(); } });
+    var search = PW.search('Search item code, name, brand, type, HSN…', 'Search items', function (v) { B.search = v; B.sel = {}; load(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    B.barTxt = h('b');
+    B.bar = h('div', { class: 'pw-bar', hidden: true, style: 'margin-top:12px' }, B.barTxt, h('span', { class: 'sp' }),
+      h('button', { type: 'button', class: 'btn soft', text: 'Mark as checked', onclick: function (e) { bulk(true, e.currentTarget); } }),
+      h('button', { type: 'button', class: 'btn soft', text: 'Remove checked mark', onclick: function (e) { bulk(false, e.currentTarget); } }),
+      h('button', { type: 'button', class: 'btn soft', text: 'Clear', onclick: function () { B.sel = {}; renderList(); } }));
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Products' }),
+      h('p', { text: 'The master list. Fill in what is missing so quotations, purchase orders and invoices come out right.' })),
+      h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn primary', text: '+ New item', onclick: newItem }))));
+    root.appendChild(h('div', { style: 'margin-top:18px' }, h('div', { class: 'toolbar' }, h('h2', { text: 'Items' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.bar, B.listBox));
+    B.body = h('div');
+    B.drawer = App.drawer({ title: 'Item', wide: true, body: B.body, footer: [h('button', { type: 'button', class: 'btn', text: 'Close', onclick: function () { B.drawer.close(); } })] });
+    ['groups', 'types', 'materials', 'brands', 'colours', 'sizes'].forEach(function (k) { root.appendChild(h('datalist', { id: 'pw-dl-' + k })); });
+  }
+
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('prd.list', { filter: B.filter, search: B.search }).then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.d = d; B.lists = d.lists;
+      Object.keys(d.lists).forEach(function (k) {
+        var dl = document.getElementById('pw-dl-' + k);
+        if (dl) { App.clear(dl); d.lists[k].forEach(function (v) { dl.appendChild(h('option', { value: v })); }); }
+      });
+      PW.chipCounts(B.chips, LABELS, [d.counts.needs, d.counts.unverified, 0]);
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' item' : ' items') + ' of ' + d.counts.total + (d.shown > d.rows.length ? ' (showing the first ' + d.rows.length + ': search to narrow it down)' : '');
+      renderList();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'items', e); } });
+  }
+  function selCount() { return Object.keys(B.sel).length; }
+  function renderBar() {
+    var n = selCount();
+    B.bar.hidden = !n; B.barTxt.textContent = n + (n === 1 ? ' item selected' : ' items selected');
+  }
+  function renderList() {
+    App.clear(B.listBox);
+    renderBar();
+    if (!B.rows.length) { B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: B.filter === 'Needs details' ? 'Every item has its details.' : 'No items found.' }))); return; }
+    B.all = h('input', { type: 'checkbox', 'aria-label': 'Select all shown' });
+    B.all.checked = B.rows.every(function (p) { return B.sel[p.code]; });
+    B.all.addEventListener('change', function () { B.rows.forEach(function (p) { if (B.all.checked) B.sel[p.code] = 1; else delete B.sel[p.code]; }); renderList(); });
+    var head = h('tr', null, h('th', { class: 'pw-c' }, B.all), h('th', { text: 'Item' }), h('th', { text: 'Group' }), h('th', { text: 'Details' }), h('th', { text: 'HSN' }), h('th', { class: 'num', text: 'GST' }),
+      h('th', { class: 'num', text: 'List price' }), h('th', { class: 'num', text: 'In warehouse' }), h('th', { text: 'Status' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+    var body = h('tbody');
+    B.rows.forEach(function (p) {
+      var cb = h('input', { type: 'checkbox', 'aria-label': 'Select ' + p.code });
+      cb.checked = !!B.sel[p.code];
+      cb.addEventListener('change', function () { if (cb.checked) B.sel[p.code] = 1; else delete B.sel[p.code]; renderBar(); B.all.checked = B.rows.every(function (x) { return B.sel[x.code]; }); });
+      var open = h('button', { type: 'button', class: 'ordno', text: p.catalogName || p.tallyName || p.code, 'aria-label': 'Edit ' + p.code });
+      open.addEventListener('click', function () { openItem(p); });
+      var det = [p.productType, p.material, p.size, p.colour, p.brand].filter(Boolean).join(' · ');
+      body.appendChild(h('tr', null,
+        h('td', { class: 'pw-c' }, cb),
+        h('td', { 'data-l': 'Item' }, open, h('span', { class: 'sub', text: p.code + (p.catalogName && p.tallyName ? ' · ' + p.tallyName : '') + ' · ' + p.pcs + ' pcs/set' })),
+        h('td', { 'data-l': 'Group', text: p.group || '–' }),
+        h('td', { 'data-l': 'Details' }, det ? h('div', { class: 'clip', title: det, text: det }) : h('span', { class: 'dash', text: '–' })),
+        h('td', { 'data-l': 'HSN' }, p.hsn || h('span', { class: 'dash', text: '–' })),
+        h('td', { class: 'num', 'data-l': 'GST' }, p.gst === '' ? h('span', { class: 'dash', text: '–' }) : App.fmtQty(p.gst) + '%'),
+        h('td', { class: 'num', 'data-l': 'List price' }, p.listPrice === '' ? h('span', { class: 'dash', text: '–' }) : App.inr(p.listPrice, 2)),
+        h('td', { class: 'num', 'data-l': 'In warehouse' }, p.wh ? App.fmtQty(p.wh) + ' pcs' : h('span', { class: 'dash', text: '0' })),
+        h('td', { 'data-l': 'Status' }, p.verified ? h('span', { class: 'pw-tick', text: '✓ Checked' }) : h('span', { class: 'mute', text: 'Not checked' }), p.missing.length ? h('div', null, p.missing.map(function (m) { return h('span', { class: 'pw-pill', text: 'No ' + (m === 'HSN' || m === 'GST' ? m : m.toLowerCase()) }); })) : null),
+        h('td', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm', text: 'Edit', onclick: function () { openItem(p); } }))));
+    });
+    B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('table', { class: 't' }, h('thead', null, head), body)));
+  }
+  function bulk(on, btn) {
+    var codes = Object.keys(B.sel);
+    if (!codes.length) return;
+    App.run(btn, function () {
+      return App.api('prd.verify', { codes: codes, verified: on }).then(function (r) { App.toast(r.done + (r.done === 1 ? ' item ' : ' items ') + (on ? 'marked as checked' : 'unmarked'), 'ok'); B.sel = {}; return load(); });
+    });
+  }
+
+  // ---------- edit one item ----------
+  function field(label, ctl, o) { return App.field(label, ctl, o || {}); }
+  function openItem(p) {
+    B.P = p; PW.drawerTitle(B.drawer, p.catalogName || p.tallyName || p.code, p.code + (p.tallyName ? ' · Tally: ' + p.tallyName : ''));
+    var f = {
+      catalog: h('input', { class: 'inp', type: 'text', maxlength: 120, value: p.catalogName, placeholder: 'Name as shown to customers' }),
+      group: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.group, list: 'pw-dl-groups' }),
+      pcs: h('input', { class: 'inp', type: 'number', min: 1, step: 1, value: p.pcs }),
+      price: h('input', { class: 'inp', type: 'number', min: 0, step: '0.01', value: p.listPrice, placeholder: 'Rs per piece, before GST' }),
+      gst: h('input', { class: 'inp', type: 'number', min: 0, max: 100, step: '0.01', value: p.gst, placeholder: '12' }),
+      hsn: h('input', { class: 'inp', type: 'text', maxlength: 8, value: p.hsn, placeholder: '4 to 8 digits' }),
+      type: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.productType, list: 'pw-dl-types' }),
+      material: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.material, list: 'pw-dl-materials' }),
+      size: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.size, list: 'pw-dl-sizes' }),
+      colour: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.colour, list: 'pw-dl-colours' }),
+      brand: h('input', { class: 'inp', type: 'text', maxlength: 60, value: p.brand, list: 'pw-dl-brands' }),
+      custom: h('input', { class: 'inp', type: 'text', maxlength: 120, value: p.customisation }),
+      photo: h('input', { class: 'inp', type: 'url', maxlength: 300, value: p.photoLink, placeholder: 'https://drive.google.com/…' })
+    };
+    var ver = PW.check('Details checked', p.verified);
+    var save = h('button', { type: 'button', class: 'btn primary', text: 'Save item' });
+    save.addEventListener('click', function () {
+      App.run(save, function () {
+        var pcs = App.num(f.pcs.value);
+        if (isNaN(pcs) || pcs < 1) { f.pcs.focus(); throw new Error('Pieces per set must be 1 or more.'); }
+        return App.api('prd.save', { code: p.code, catalogName: f.catalog.value, group: f.group.value, pcs: pcs, listPrice: f.price.value, gst: f.gst.value, hsn: f.hsn.value,
+          productType: f.type.value, material: f.material.value, size: f.size.value, colour: f.colour.value, brand: f.brand.value, customisation: f.custom.value, photoLink: f.photo.value })
+          .then(function () { return ver.get() !== p.verified ? App.api('prd.verify', { codes: [p.code], verified: ver.get() }) : null; })
+          .then(function () { App.toast('Saved ' + p.code, 'ok'); B.drawer.close(); return load(); });
+      });
+    });
+    App.clear(B.body);
+    B.body.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '1' }), h('h2', { text: 'Name and price' }))),
+      h('div', { class: 'grid' }, field('Catalog name', f.catalog, { cls: 'span2' }), field('Stock group', f.group), field('Pieces per set', f.pcs, { required: true, hint: h('span', { class: 'pw-note', text: 'Changing this changes how sets convert to pieces everywhere.' }) }),
+        field('List price (Rs / piece)', f.price), field('GST %', f.gst), field('HSN', f.hsn))));
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '2' }), h('h2', { text: 'What it is' }))),
+      h('div', { class: 'grid' }, field('Product type', f.type), field('Material', f.material), field('Size', f.size), field('Colour', f.colour), field('Brand', f.brand), field('Customisation', f.custom),
+        field('Picture link', f.photo, { cls: 'span2' }))));
+    B.body.appendChild(h('div', { class: 'card', style: 'margin-top:16px' }, h('div', { class: 'chead' }, h('div', { class: 'step' }, h('i', { text: '3' }), h('h2', { text: 'Check' }))),
+      h('div', { class: 'pw-sum', style: 'margin-bottom:14px' }, h('div', null, h('span', { text: 'In warehouse' }), h('b', { text: App.fmtQty(p.wh) + ' pcs' })), h('div', null, h('span', { text: 'Available to sell' }), h('b', { text: p.avail === '' ? '–' : App.fmtQty(p.avail) + ' pcs' }))),
+      ver.el, p.verified && p.verifiedBy ? h('p', { class: 'pw-note', style: 'margin:6px 0 0', text: 'Checked by ' + p.verifiedBy + (p.verifiedOn ? ' on ' + App.fmtDate(p.verifiedOn) : '') }) : null,
+      h('div', { class: 'actions' }, save)));
+    B.drawer.open();
+  }
+
+  // ---------- a brand-new item ----------
+  function newItem() {
+    var f = {
+      code: h('input', { class: 'inp', type: 'text', maxlength: 30, placeholder: 'Item code' }), name: h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'Name' }),
+      group: h('input', { class: 'inp', type: 'text', maxlength: 60, list: 'pw-dl-groups', placeholder: 'Stock group' }), pcs: h('input', { class: 'inp', type: 'number', min: 1, step: 1, value: 1 }),
+      gst: h('input', { class: 'inp', type: 'number', min: 0, max: 100, step: '0.01', placeholder: '12' })
+    };
+    App.modal({
+      title: 'New item', body: h('div', null, h('p', { class: 'mute', text: 'Items normally arrive from the Tally import. Add one here only when you need it before the next import; fill in the rest afterwards.' }),
+        h('div', { class: 'grid' }, App.field('Item code', f.code, { required: true }), App.field('Name (as in Tally)', f.name, { required: true }), App.field('Stock group', f.group), App.field('Pieces per set', f.pcs), App.field('GST %', f.gst))),
+      buttons: [{ label: 'Cancel' }, { label: 'Add item', kind: 'primary', onclick: function (api, btn) {
+        App.run(btn, function () {
+          if (!f.code.value.trim()) { f.code.focus(); throw new Error('Enter the item code.'); }
+          if (!f.name.value.trim()) { f.name.focus(); throw new Error('Enter the item name.'); }
+          return App.api('prod.create', { code: f.code.value.trim(), name: f.name.value, group: f.group.value, pcs: f.pcs.value, gst: f.gst.value }).then(function (r) {
+            api.close(); App.toast('Added ' + r.code + ' - now fill in its details', 'ok'); B.filter = 'All'; B.chips.set('All'); B.search = r.code; B.sel = {};
+            return load().then(function () { var p = B.rows.filter(function (x) { return x.code === r.code; })[0]; if (p) openItem(p); });
+          });
+        });
+      } }]
+    });
+  }
+
+  App.register('products', 'Products', { init: init, show: function () { load(); } });
+})();
+</script>

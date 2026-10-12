@@ -1,0 +1,91 @@
+<script>
+/* UsersBoard.html - Admin: who can use the app, and as what. The role decides which department opens for them
+   (Sales, Procurement, Warehouse, Accounts); an Admin can open all of them. You cannot remove or demote yourself, and
+   there is always at least one Admin. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var B = { f: {}, rows: [], roles: [], counts: {}, search: '', seq: 0, orig: '', listBox: null, countBox: null, title: null, saveBtn: null, cancelBtn: null, roleBox: null };
+
+  function init(root) {
+    var f = B.f;
+    f.email = h('input', { class: 'inp', type: 'email', maxlength: 120, placeholder: 'name@gmail.com' });
+    f.name = h('input', { class: 'inp', type: 'text', maxlength: 80 });
+    f.role = h('select', { class: 'inp' });
+    B.saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Add person' });
+    B.cancelBtn = h('button', { type: 'button', class: 'btn', text: 'Cancel edit', hidden: true, onclick: reset });
+    B.saveBtn.addEventListener('click', function () { App.run(B.saveBtn, save); });
+    B.title = h('h2', { text: 'Add a person' });
+    B.roleBox = h('div', { class: 'pw-note', style: 'margin-top:8px' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Users' }), h('p', { text: 'The people who can open Hospi Ops. Use the Google email they sign in with.' }))));
+    root.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, B.title),
+      h('div', { class: 'grid' }, App.field('Google email', f.email, { required: true }), App.field('Name', f.name, { required: true }), App.field('Role', f.role, { required: true })), B.roleBox,
+      h('div', { class: 'actions' }, B.saveBtn, B.cancelBtn)));
+    var search = PW.search('Search name, email, role…', 'Search users', function (v) { B.search = v; render(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    root.appendChild(h('div', { style: 'margin-top:22px' }, h('div', { class: 'toolbar' }, h('h2', { text: 'Everyone' }), h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+    f.role.addEventListener('change', roleNote);
+  }
+  function roleNote() {
+    var r = B.f.role.value, txt = { Admin: 'Opens every department and can manage users, products and locations.', Sales: 'Opens Sales: leads, requirements, quotes and orders.',
+      Procurement: 'Opens Procurement: purchase queue, purchase orders and suppliers.', Warehouse: 'Opens Warehouse: receiving, put-away, dispatch, stock and audit counts.',
+      Accounts: 'Opens Accounts: order receipts, purchase receipts, payments and the review of audit counts.' }[r] || '';
+    B.roleBox.textContent = txt;
+  }
+  function reset() {
+    B.orig = ''; B.f.email.value = ''; B.f.name.value = ''; B.f.email.disabled = false;
+    if (B.roles.length) B.f.role.value = B.roles.indexOf('Sales') >= 0 ? 'Sales' : B.roles[0];
+    B.title.textContent = 'Add a person'; B.saveBtn.textContent = 'Add person'; B.cancelBtn.hidden = true; roleNote();
+  }
+  function edit(u) {
+    B.orig = u.email; B.f.email.value = u.email; B.f.name.value = u.name; B.f.email.disabled = u.you;
+    B.f.role.value = u.valid ? u.role : B.f.role.value;
+    B.title.textContent = 'Edit ' + u.name; B.saveBtn.textContent = 'Save changes'; B.cancelBtn.hidden = false; roleNote();
+    B.f.name.focus(); window.scrollTo(0, 0);
+  }
+  function save() {
+    var f = B.f;
+    if (!f.email.value.trim()) { f.email.focus(); throw new Error('Enter the Google email.'); }
+    if (!f.name.value.trim()) { f.name.focus(); throw new Error('Enter the name.'); }
+    return App.api('usr.save', { originalEmail: B.orig, email: f.email.value, name: f.name.value, role: f.role.value }).then(function () {
+      App.toast('Saved ' + f.name.value.trim(), 'ok'); reset(); return load();
+    });
+  }
+  function remove(u) {
+    App.confirm({ title: 'Remove ' + u.name, message: u.name + ' (' + u.email + ') will no longer be able to open Hospi Ops. Their past work stays.', ok: 'Remove', danger: true }).then(function (yes) {
+      if (!yes) return null;
+      return App.api('usr.delete', { email: u.email }).then(function () { App.toast(u.name + ' removed', 'ok'); if (B.orig === u.email) reset(); return load(); }).catch(function (e) { App.toast(e.message, 'err'); });
+    });
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('usr.list').then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.counts = d.counts;
+      if (!B.roles.length) {
+        B.roles = d.roles; d.roles.forEach(function (r) { B.f.role.appendChild(h('option', { value: r, text: r })); });
+        B.f.role.value = d.roles.indexOf('Sales') >= 0 ? 'Sales' : d.roles[0]; roleNote();
+      }
+      render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'users', e); } });
+  }
+  function render() {
+    var q = B.search.toLowerCase(), rows = B.rows.filter(function (u) { return !q || [u.name, u.email, u.role].join(' ').toLowerCase().indexOf(q) >= 0; });
+    B.countBox.textContent = rows.length + (rows.length === 1 ? ' person' : ' people') + ' · ' + B.roles.map(function (r) { return B.counts[r] + ' ' + r; }).join(', ');
+    var cols = [
+      { h: 'Person', f: function (u) { return h('div', { class: 'who2' }, h('i', { text: App.initials(u.name) }), h('div', null, h('b', { text: u.name }), u.you ? ' ' : null, u.you ? App.badge('You', 'blue') : null, h('span', { class: 'sub', text: u.email }))); } },
+      { h: 'Role', f: function (u) { return u.valid ? App.badge(u.role, u.role === 'Admin' ? 'blue' : 'green') : [App.badge(u.role || 'No role', 'red'), h('span', { class: 'sub late', text: 'cannot sign in' })]; } },
+      { h: 'Opens', f: function (u) { return u.depts.length ? u.depts.join(', ') : h('span', { class: 'dash', text: '–' }); } },
+      { h: '', cls: 'acts', f: function (u) {
+          var out = [h('button', { type: 'button', class: 'btn sm', text: 'Edit', onclick: function () { edit(u); } })];
+          if (!u.you) out.push(' ', h('button', { type: 'button', class: 'btn sm danger', text: 'Remove', onclick: function () { remove(u); } }));
+          return out; } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, rows, 'No users found.'));
+  }
+  App.register('users', 'Users', { init: init, show: function () { load(); } });
+})();
+</script>

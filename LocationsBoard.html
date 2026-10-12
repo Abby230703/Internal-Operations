@@ -1,0 +1,67 @@
+<script>
+/* LocationsBoard.html - Admin: the shelves and zones stock can be put on. A location code never changes once it exists (stock, orders and
+   audit counts refer to it): to retire a shelf, move its stock away and stop using it. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var B = { f: {}, rows: [], search: '', seq: 0, editing: '', listBox: null, countBox: null, title: null, saveBtn: null, cancelBtn: null };
+
+  function init(root) {
+    var f = B.f;
+    f.code = h('input', { class: 'inp', type: 'text', maxlength: 30, placeholder: 'FL2-ZB-S2' });
+    f.floor = h('input', { class: 'inp', type: 'text', maxlength: 10, placeholder: '2' });
+    f.zone = h('input', { class: 'inp', type: 'text', maxlength: 20, placeholder: 'B' });
+    f.shelf = h('input', { class: 'inp', type: 'text', maxlength: 20, placeholder: 'S2' });
+    f.desc = h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'Floor 2, Zone B, Shelf 2' });
+    B.saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Add location' });
+    B.cancelBtn = h('button', { type: 'button', class: 'btn', text: 'Cancel edit', hidden: true, onclick: reset });
+    B.saveBtn.addEventListener('click', function () { App.run(B.saveBtn, save); });
+    B.title = h('h2', { text: 'Add a location' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Locations' }), h('p', { text: 'Where stock can be put. The warehouse picks one of these on put-away, dispatch and audit counts.' }))));
+    root.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, B.title),
+      h('div', { class: 'grid' }, App.field('Location code', f.code, { required: true, hint: h('span', { class: 'pw-note', text: 'Letters, digits and - only. Cannot be changed later.' }) }), App.field('Floor', f.floor), App.field('Zone', f.zone), App.field('Shelf', f.shelf), App.field('Description', f.desc, { cls: 'span2' })),
+      h('div', { class: 'actions' }, B.saveBtn, B.cancelBtn)));
+    var search = PW.search('Search code, zone, description…', 'Search locations', function (v) { B.search = v; render(); });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div');
+    root.appendChild(h('div', { style: 'margin-top:22px' }, h('div', { class: 'toolbar' }, h('h2', { text: 'All locations' }), h('div', { class: 'sx grow' }, App.icon('search'), search),
+      h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+  }
+  function reset() {
+    B.editing = ''; Object.keys(B.f).forEach(function (k) { B.f[k].value = ''; }); B.f.code.disabled = false;
+    B.title.textContent = 'Add a location'; B.saveBtn.textContent = 'Add location'; B.cancelBtn.hidden = true;
+  }
+  function edit(l) {
+    B.editing = l.code; B.f.code.value = l.code; B.f.code.disabled = true; B.f.floor.value = l.floor; B.f.zone.value = l.zone; B.f.shelf.value = l.shelf; B.f.desc.value = l.desc;
+    B.title.textContent = 'Edit ' + l.code; B.saveBtn.textContent = 'Save changes'; B.cancelBtn.hidden = false; B.f.desc.focus(); window.scrollTo(0, 0);
+  }
+  function save() {
+    var f = B.f;
+    if (!f.code.value.trim()) { f.code.focus(); throw new Error('Enter the location code.'); }
+    return App.api('loc.save', { code: f.code.value, floor: f.floor.value, zone: f.zone.value, shelf: f.shelf.value, desc: f.desc.value, isNew: !B.editing }).then(function (r) {
+      App.toast('Saved ' + r.code, 'ok'); reset(); return load();
+    });
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('loc.admin').then(function (rows) { if (seq !== B.seq) return; B.rows = rows; render(); })
+      .catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'locations', e); } });
+  }
+  function render() {
+    var q = B.search.toLowerCase(), rows = B.rows.filter(function (l) { return !q || [l.code, l.floor, l.zone, l.shelf, l.desc].join(' ').toLowerCase().indexOf(q) >= 0; });
+    B.countBox.textContent = rows.length + (rows.length === 1 ? ' location' : ' locations');
+    var cols = [
+      { h: 'Code', f: function (l) { return h('b', { text: l.code }); } },
+      { h: 'Floor', f: function (l) { return l.floor || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Zone', f: function (l) { return l.zone || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Shelf', f: function (l) { return l.shelf || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Description', f: function (l) { return l.desc || h('span', { class: 'dash', text: '–' }); } },
+      { h: 'Stock here', cls: 'num', f: function (l) { return l.pcs ? [App.fmtQty(l.pcs) + ' pcs', h('span', { class: 'sub', text: l.items + (l.items === 1 ? ' item' : ' items') })] : h('span', { class: 'dash', text: 'empty' }); } },
+      { h: '', cls: 'acts', f: function (l) { return h('button', { type: 'button', class: 'btn sm', text: 'Edit', onclick: function () { edit(l); } }); } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, rows, 'No locations found.'));
+  }
+  App.register('locations', 'Locations', { init: init, show: function () { load(); } });
+})();
+</script>

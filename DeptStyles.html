@@ -2,7 +2,7 @@
 /* DeptStyles.html - the few styles the Procurement and Warehouse boards need on top of Styles.html (same tokens). */
 
 /* the customer / lead search belongs to Sales */
-.dept-procurement #gs,.dept-warehouse #gs{display:none}
+.dept-procurement #gs,.dept-warehouse #gs,.dept-accounts #gs,.dept-admin #gs{display:none}
 
 .pw-check{display:inline-flex;align-items:center;gap:8px;font:600 13.5px var(--sans);color:var(--ink2);cursor:pointer;white-space:nowrap}
 .pw-check input{margin:0}
@@ -54,6 +54,26 @@
 .pw-pos{color:var(--ok);font-weight:700}
 .pw-note{font-size:12.5px;color:var(--mute)}
 .pw-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+
+/* Accounts + Admin */
+.drawer table.t{min-width:0}
+.drawer .t th,.drawer .t td{padding-left:12px;padding-right:12px}
+.pw-date{width:165px!important}
+.pw-pay td.pw-dir-in,.pw-in{color:var(--ok);font-weight:700}
+.pw-out{color:var(--warn);font-weight:700}
+.pw-money{white-space:nowrap}
+.pw-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.pw-sum div{background:var(--bg,#F6F7FB);border:1px solid var(--line);border-radius:14px;padding:10px 14px}
+.pw-sum span{display:block;font-size:12px;color:var(--mute);font-weight:700}
+.pw-sum b{font:800 18px var(--head)}
+.pw-ex{border:1px solid var(--line);border-left-width:5px;border-radius:14px;padding:12px 16px;background:var(--surface);margin-bottom:10px}
+.pw-ex.high{border-left-color:var(--err)}.pw-ex.med{border-left-color:var(--warn)}.pw-ex.info{border-left-color:var(--info)}
+.pw-ex h3{font:700 15px var(--sans);margin:0 0 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pw-ex ul{margin:0;padding-left:18px;color:var(--ink2);font-size:13.5px}
+.pw-ex .more{color:var(--mute);font-size:12.5px;margin-top:4px}
+.pw-grp{font:800 13px var(--head);letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:22px 0 10px}
+.pw-pill{display:inline-block;font:700 11.5px var(--sans);padding:2px 9px;border-radius:99px;background:var(--warn-l);color:var(--warn);margin:0 4px 2px 0;white-space:nowrap}
+.pw-tick{color:var(--ok);font-weight:700}
 
 @media (max-width:760px){
   .pw-lines .line-nums{grid-template-columns:repeat(2,minmax(0,1fr))}

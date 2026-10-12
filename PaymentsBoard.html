@@ -1,0 +1,76 @@
+<script>
+/* PaymentsBoard.html - Accounts: every rupee in and out, newest first. Receipts come from the Order receipts tab and payments from the
+   Purchase receipts tab; this page is for looking things up, correcting a wrong entry and taking a copy into a spreadsheet.
+   Only an Admin can delete a payment. */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('accounts')) return;
+  var LABELS = ['All', 'Received', 'Paid'];
+  var B = { dir: 'All', search: '', from: '', to: '', seq: 0, rows: [], d: null, listBox: null, countBox: null, statBox: null, chips: null, fromBox: null, toBox: null };
+  function isAdmin() { return App.boot && App.boot.user && App.boot.user.role === 'Admin'; }
+
+  function init(root) {
+    B.chips = App.seg({ cls: 'chips-s', label: 'Filter payments', value: B.dir, options: LABELS.map(function (l) { return { v: l, label: l === 'Received' ? 'Money in' : (l === 'Paid' ? 'Money out' : 'All') }; }), onChange: function (v) { B.dir = v; load(); } });
+    var search = PW.search('Search order, customer, supplier, reference…', 'Search payments', function (v) { B.search = v; load(); });
+    B.fromBox = h('input', { class: 'inp pw-date', type: 'date', 'aria-label': 'From date' }); B.toBox = h('input', { class: 'inp pw-date', type: 'date', 'aria-label': 'To date' });
+    B.fromBox.addEventListener('change', function () { B.from = B.fromBox.value; load(); }); B.toBox.addEventListener('change', function () { B.to = B.toBox.value; load(); });
+    var month = h('button', { type: 'button', class: 'btn', text: 'This month', onclick: function () {
+      var t = App.today(); B.from = t.slice(0, 8) + '01'; B.to = t; B.fromBox.value = B.from; B.toBox.value = B.to; load(); } });
+    var all = h('button', { type: 'button', class: 'btn', text: 'All dates', onclick: function () { B.from = B.to = ''; B.fromBox.value = B.toBox.value = ''; load(); } });
+    var dl = h('button', { type: 'button', class: 'btn', text: 'Download', onclick: download });
+    B.countBox = h('div', { class: 'count' }); B.listBox = h('div'); B.statBox = h('div', { class: 'stats', style: 'margin:18px 0' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Payments' }),
+      h('p', { text: 'All money received from customers and paid to suppliers. Correct a wrong amount, date or reference here.' }))));
+    root.appendChild(B.statBox);
+    root.appendChild(h('div', null, h('div', { class: 'toolbar' }, h('h2', { text: 'Ledger' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search)),
+      h('div', { class: 'toolbar', style: 'margin-top:10px' }, h('span', { class: 'pw-note', text: 'From' }), B.fromBox, h('span', { class: 'pw-note', text: 'to' }), B.toBox, month, all, h('span', { class: 'grow' }), dl,
+        h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })), B.countBox, B.listBox));
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.countBox.textContent = 'Loading…';
+    return App.api('pay.list', { direction: B.dir, search: B.search, from: B.from, to: B.to }).then(function (d) {
+      if (seq !== B.seq) return;
+      B.rows = d.rows; B.d = d;
+      B.countBox.textContent = d.shown + (d.shown === 1 ? ' payment' : ' payments') + (d.shown > d.rows.length ? ' (showing the latest ' + d.rows.length + ': narrow the dates)' : '');
+      App.clear(B.statBox);
+      [PW.stat('Money in', PW.rs(d.totals.received, 2), 'from customers', 'g'), PW.stat('Money out', PW.rs(d.totals.paid, 2), 'to suppliers'),
+       PW.stat('Net', (d.totals.net < 0 ? '− ' : '') + PW.rs(Math.abs(d.totals.net), 2), d.totals.net < 0 ? 'more went out than came in' : 'in minus out', d.totals.net < 0 ? 'c' : '')].forEach(function (n) { B.statBox.appendChild(n); });
+      render();
+    }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'payments', e); } });
+  }
+  function download() {
+    if (!B.rows.length) { App.toast('Nothing to download.', 'err'); return; }
+    PW.csv('payments-' + App.today() + '.csv', [
+      { h: 'Date', f: function (p) { return p.date; } }, { h: 'Direction', f: function (p) { return p.direction; } }, { h: 'For', f: function (p) { return p.refNo; } },
+      { h: 'Party', f: function (p) { return p.party; } }, { h: 'Amount', f: function (p) { return p.amount; } }, { h: 'Mode', f: function (p) { return p.mode; } },
+      { h: 'Reference', f: function (p) { return p.referenceNo; } }, { h: 'Entered by', f: function (p) { return p.by; } }, { h: 'Notes', f: function (p) { return p.notes; } }], B.rows);
+  }
+  function correct(p) {
+    PW.payDialog({ kind: p.refType, id: p.refId, no: p.refNo || p.refId, party: p.party, balance: null, pay: p, onDone: load });
+  }
+  function remove(p) {
+    App.confirm({ title: 'Delete payment', message: 'Delete the ' + PW.rs(p.amount, 2) + ' ' + p.direction.toLowerCase() + ' on ' + App.fmtDate(p.date) + ' for ' + (p.refNo || p.refId) + '? This cannot be undone.', ok: 'Delete', danger: true }).then(function (yes) {
+      if (!yes) return null;
+      return App.api('pay.delete', { id: p.id }).then(function () { App.toast('Payment deleted', 'ok'); return load(); }).catch(function (e) { App.toast(e.message, 'err'); });
+    });
+  }
+  function render() {
+    var cols = [
+      { h: 'Date', f: function (p) { return App.fmtDate(p.date); } },
+      { h: 'In / out', f: function (p) { return App.badge(p.direction === 'Received' ? 'Money in' : 'Money out', p.direction === 'Received' ? 'green' : 'amber'); } },
+      { h: 'For', f: function (p) { return [p.refNo || h('span', { class: 'dash', text: 'Unknown ' + p.refType }), h('span', { class: 'sub', text: (p.refType === 'Order' ? 'Order' : 'Delivery') + (p.party ? ' · ' + p.party : '') })]; } },
+      { h: 'Amount', cls: 'num', f: function (p) { return h('span', { class: 'pw-money ' + (p.direction === 'Received' ? 'pw-in' : 'pw-out'), text: PW.rs(p.amount, 2) }); } },
+      { h: 'How', f: function (p) { return [p.mode, p.referenceNo ? h('span', { class: 'sub', text: p.referenceNo }) : null]; } },
+      { h: 'Entered by', f: function (p) { return [p.by, p.notes ? h('span', { class: 'sub', text: p.notes }) : null]; } },
+      { h: '', cls: 'acts', f: function (p) {
+          var out = [h('button', { type: 'button', class: 'btn sm', text: 'Correct', onclick: function () { correct(p); } })];
+          if (isAdmin()) out.push(' ', h('button', { type: 'button', class: 'btn sm danger', text: 'Delete', onclick: function () { remove(p); } }));
+          return out; } }
+    ];
+    App.clear(B.listBox).appendChild(App.table(cols, B.rows, 'No payments match.'));
+  }
+  App.register('payments', 'Payments', { init: init, show: function () { load(); } });
+})();
+</script>

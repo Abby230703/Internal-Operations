@@ -1,0 +1,71 @@
+<script>
+/* OverviewBoard.html - Admin: where every department stands, what looks wrong, and a check that the sheet still has the tabs and
+   columns the app needs. Read-only: fix things in the department that owns them (the links open that department). */
+(function () {
+  'use strict';
+  var App = window.App, h = App.h, PW = window.PW;
+  if (!PW.active('admin')) return;
+  var B = { seq: 0, cardBox: null, exBox: null, chkBox: null, stamp: null };
+  var DEPTS = ['Procurement', 'Warehouse', 'Accounts', 'Admin'];
+
+  function init(root) {
+    B.cardBox = h('div'); B.exBox = h('div'); B.chkBox = h('div'); B.stamp = h('div', { class: 'count' });
+    root.appendChild(h('div', { class: 'ph' }, h('div', null, h('h1', { text: 'Overview' }),
+      h('p', { text: 'A look across the whole business: what is waiting in each department, and anything that looks wrong.' })),
+      h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load }))));
+    root.appendChild(B.stamp);
+    root.appendChild(B.cardBox);
+    root.appendChild(h('div', { class: 'pw-grp', text: 'Needs attention' }));
+    root.appendChild(B.exBox);
+    var check = h('button', { type: 'button', class: 'btn', text: 'Run sheet check' });
+    check.addEventListener('click', function () { App.run(check, runCheck); });
+    root.appendChild(h('div', { class: 'pw-grp', text: 'Sheet check' }));
+    root.appendChild(h('div', { class: 'card' }, h('div', { class: 'chead' }, h('div', null, h('h2', { text: 'Tabs and columns' }), h('p', { class: 'pw-note', style: 'margin:4px 0 0', text: 'Checks that every tab the app uses exists and has the columns it needs.' })), check), B.chkBox));
+  }
+  function load() {
+    var seq = ++B.seq;
+    B.stamp.textContent = 'Loading…';
+    return App.api('adm.overview').then(function (d) {
+      if (seq !== B.seq) return;
+      B.stamp.textContent = 'As of ' + App.fmtDate(d.today) + '. Several tabs are read to build this page, so it takes a few seconds.';
+      var high = d.exceptions.filter(function (e) { return e.sev === 'high'; }).length;
+      PW.badge('overview', high, 'Things that look wrong');
+      cards(d); exceptions(d);
+    }).catch(function (e) { if (seq === B.seq) { B.stamp.textContent = ''; PW.loadError(B.exBox, 'the overview', e); } });
+  }
+  function cards(d) {
+    App.clear(B.cardBox);
+    DEPTS.forEach(function (dep) {
+      var list = d.cards.filter(function (c) { return c.dept === dep; });
+      if (!list.length) return;
+      var url = PW.deptUrl(dep), grid = h('div', { class: 'stats' });
+      list.forEach(function (c) { grid.appendChild(PW.stat(c.title, c.money ? PW.rs(c.value) : c.value, c.sub)); });
+      B.cardBox.appendChild(h('div', { class: 'pw-grp' }, dep, url ? [' ', h('a', { href: url, target: '_top', style: 'text-transform:none;letter-spacing:0;font-weight:600', text: 'open →' })] : null));
+      B.cardBox.appendChild(grid);
+    });
+  }
+  function exceptions(d) {
+    App.clear(B.exBox);
+    if (!d.exceptions.length) { B.exBox.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty', text: 'Nothing looks wrong right now.' }))); return; }
+    d.exceptions.forEach(function (e) {
+      var url = PW.deptUrl(e.dept);
+      B.exBox.appendChild(h('div', { class: 'pw-ex ' + e.sev },
+        h('h3', null, e.title, ' ', App.badge(e.dept, e.sev === 'high' ? 'red' : (e.sev === 'med' ? 'amber' : 'blue')), url ? h('a', { href: url, target: '_top', style: 'font-weight:600;font-size:13px', text: 'open ' + e.dept + ' →' }) : null),
+        h('ul', null, e.items.map(function (t) { return h('li', { text: t }); })), e.more ? h('div', { class: 'more', text: '… and ' + e.more + ' more' }) : null));
+    });
+  }
+  function runCheck() {
+    return App.api('adm.check').then(function (d) {
+      var bad = d.tables.filter(function (t) { return !t.ok; }).length;
+      App.clear(B.chkBox);
+      B.chkBox.appendChild(h('div', { class: bad ? 'note err' : 'note', style: bad ? '' : 'background:var(--ok-l);color:var(--ok)', text: bad ? bad + (bad === 1 ? ' tab has a problem.' : ' tabs have problems.') : 'All ' + d.tables.length + ' tabs look right.' }));
+      B.chkBox.appendChild(App.table([
+        { h: 'Tab', f: function (t) { return t.sheet; } },
+        { h: 'Rows', cls: 'num', f: function (t) { return String(t.rows); } },
+        { h: 'Result', f: function (t) { return t.ok ? App.badge('OK', 'green') : [App.badge('Problem', 'red'), h('span', { class: 'sub late', text: t.error || ('Missing columns: ' + t.missing.join(', ')) })]; } }
+      ], d.tables, ''));
+    });
+  }
+  App.register('overview', 'Overview', { init: init, show: function () { load(); } });
+})();
+</script>

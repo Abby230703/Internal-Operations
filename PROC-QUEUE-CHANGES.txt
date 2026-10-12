@@ -1,0 +1,379 @@
+CHANGES TO MAKE: Purchase queue (accept = supplier pop-up, no supplier field, accepted items highlighted)
+========================================================================================
+
+What changes for the user
+  - The Stock top-up form and the review table (Awaiting decision) have NO supplier field any more.
+  - Pressing Accept (on a row, or on the selected rows) opens a pop-up: pick the supplier, or add a new one from
+    the same pop-up. Choosing the supplier is what accepts the requirement. Accept without a supplier is refused.
+  - A stock top-up joins the queue as "Awaiting decision" (it is no longer auto-accepted).
+  - In Accepted (and in All), items accepted but not yet on a purchase order are highlighted in green, with a banner,
+    a "Ready to order" label under the status, and a green Accepted filter button while any are waiting.
+  - The Supplier column is hidden while reviewing and shown for Accepted / Ordered / Denied / All.
+
+How to apply
+  Three files change: Procurement.gs, ProcQueueBoard.html, DeptStyles.html.
+  For each numbered edit: find the FIND text in the file (the lines marked ' ' are only there to make the place
+  unique and are repeated unchanged in the REPLACE text), and replace the whole FIND block with the REPLACE block.
+  Lines starting with '-' in a diff do not appear here: FIND is exactly the old text, REPLACE is exactly the new text.
+  No other file changes. Redeploy a new version afterwards.
+
+########################################################################################
+# FILE: Procurement.gs
+########################################################################################
+
+----- EDIT 1  (Procurement.gs) -----
+FIND:
+      },
+    
+      /** The purchase manager's call. args: { ids, decision: Accepted|Denied|'' (back to the queue), supplierId? } */
+      pqDecide: function (a) {
+REPLACE WITH:
+      },
+    
+      /**
+       * The purchase manager's call. args: { ids, decision: Accepted|Denied|'' (back to the queue), supplierId }
+       * Accepting needs a supplier: choosing the supplier is what confirms the acceptance. A requirement that already
+       * has a supplier keeps it when none is sent.
+       */
+      pqDecide: function (a) {
+
+----- EDIT 2  (Procurement.gs) -----
+FIND:
+        if (sid && !ProcApi.suppliers_().by[sid]) throw new Error('That supplier no longer exists.');
+        var done = 0, skipped = 0;
+        ProcApi.reqsByIds_(ids).forEach(function (r) {
+          if (U.s(r['PO ID'])) { skipped++; return; }          // already on a purchase order: its status cannot change
+          var upd = { 'Status': d };
+REPLACE WITH:
+        if (sid && !ProcApi.suppliers_().by[sid]) throw new Error('That supplier no longer exists.');
+        var rows = ProcApi.reqsByIds_(ids).filter(function (r) { return !U.s(r['PO ID']); }), skipped = ids.length - rows.length;
+        if (d === 'Accepted') {
+          rows.forEach(function (r) { if (!sid && !U.s(r['Supplier'])) throw new Error('Choose the supplier to accept this requirement.'); });
+        }
+        rows.forEach(function (r) {                       // a requirement already on a purchase order cannot change (skipped above)
+          var upd = { 'Status': d };
+
+----- EDIT 3  (Procurement.gs) -----
+FIND:
+          Db.update('requirements', r._row, upd);
+          done++;
+        });
+        return { done: done, skipped: skipped };
+      },
+REPLACE WITH:
+          Db.update('requirements', r._row, upd);
+        });
+        return { done: rows.length, skipped: skipped };
+      },
+
+----- EDIT 4  (Procurement.gs) -----
+FIND:
+      },
+    
+      /** A stock need raised by Procurement itself (no customer or lead). The person adding it is the decider, so it starts Accepted. */
+      pqAddStock: function (a, user) {
+        var code = U.s(a.itemCode), desc = U.s(a.itemDesc), sets = U.toNum(a.sets), sid = U.s(a.supplierId), raw = '';
+        if (code) { raw = Items.raw(code); if (raw === null) throw new Error('Item ' + code + ' is not in Products.'); desc = ''; }
+REPLACE WITH:
+      },
+    
+      /** A stock need raised by Procurement itself (no customer or lead). It joins the queue and waits for the decision like any other. */
+      pqAddStock: function (a, user) {
+        var code = U.s(a.itemCode), desc = U.s(a.itemDesc), sets = U.toNum(a.sets), raw = '';
+        if (code) { raw = Items.raw(code); if (raw === null) throw new Error('Item ' + code + ' is not in Products.'); desc = ''; }
+
+----- EDIT 5  (Procurement.gs) -----
+FIND:
+        if (!(sets > 0)) throw new Error('Enter the quantity.');
+        if (sid && !ProcApi.suppliers_().by[sid]) throw new Error('That supplier no longer exists.');
+        var need = '';
+REPLACE WITH:
+        if (!(sets > 0)) throw new Error('Enter the quantity.');
+        var need = '';
+
+----- EDIT 6  (Procurement.gs) -----
+FIND:
+        Db.append('requirements', [{
+          'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need, 'Supplier': sid, 'Status': 'Accepted',
+          'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
+REPLACE WITH:
+        Db.append('requirements', [{
+          'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need,
+          'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
+
+########################################################################################
+# FILE: ProcQueueBoard.html
+########################################################################################
+
+----- EDIT 7  (ProcQueueBoard.html) -----
+FIND:
+      var STATES = ['', 'Accepted', 'Ordered', 'Denied'];
+      var GROUP_NOTE = { '': 'Waiting for your decision', 'Accepted': 'Accepted - ready to put on a purchase order', 'Ordered': 'On a purchase order', 'Denied': 'Declined' };
+      var LABELS = ['Awaiting decision', 'Accepted', 'Ordered', 'Denied', 'All'];
+REPLACE WITH:
+      var STATES = ['', 'Accepted', 'Ordered', 'Denied'];
+      var GROUP_NOTE = { '': 'Waiting for your decision', 'Accepted': 'Accepted - still to be put on a purchase order', 'Ordered': 'On a purchase order', 'Denied': 'Declined' };
+      var LABELS = ['Awaiting decision', 'Accepted', 'Ordered', 'Denied', 'All'];
+
+----- EDIT 8  (ProcQueueBoard.html) -----
+FIND:
+        f.needBy = h('input', { class: 'inp', type: 'date' });
+        f.sup = PW.select([{ v: '', label: '- supplier -' }], '', 'inp');
+        f.notes = h('input', { class: 'inp', type: 'text', maxlength: 300, placeholder: 'Optional' });
+REPLACE WITH:
+        f.needBy = h('input', { class: 'inp', type: 'date' });
+        f.notes = h('input', { class: 'inp', type: 'text', maxlength: 300, placeholder: 'Optional' });
+
+----- EDIT 9  (ProcQueueBoard.html) -----
+FIND:
+          h('div', { class: 'chead', style: 'margin-bottom:14px' }, h('h2', { text: 'Stock top-up' }),
+            h('span', { class: 'mute', style: 'font-size:13px', text: 'An item you want in stock with no customer behind it. It goes straight to Accepted.' })),
+          h('div', { class: 'quick', style: 'grid-template-columns:minmax(220px,2fr) 96px 96px 150px minmax(140px,1fr) minmax(120px,1fr) auto' },
+            App.field('Item', f.item.el, { required: true, hint: f.info }), App.field('Pieces', f.q.pcs, { required: true }), App.field('or Sets', f.q.sets),
+            App.field('Need by', f.needBy), App.field('Supplier', f.sup), App.field('Notes', f.notes), saveBtn));
+    
+        B.chips = App.seg({
+REPLACE WITH:
+          h('div', { class: 'chead', style: 'margin-bottom:14px' }, h('h2', { text: 'Stock top-up' }),
+            h('span', { class: 'mute', style: 'font-size:13px', text: 'An item you want in stock with no customer behind it. It joins the queue below, waiting for your decision.' })),
+          h('div', { class: 'quick', style: 'grid-template-columns:minmax(220px,2fr) 96px 96px 150px minmax(140px,1fr) auto' },
+            App.field('Item', f.item.el, { required: true, hint: f.info }), App.field('Pieces', f.q.pcs, { required: true }), App.field('or Sets', f.q.sets),
+            App.field('Need by', f.needBy), App.field('Notes', f.notes), saveBtn));
+    
+        B.chips = App.seg({
+
+----- EDIT 10  (ProcQueueBoard.html) -----
+FIND:
+          B.bar, B.countBox, B.listBox));
+        PW.suppliers().then(fillSuppliers).catch(function () { return null; });
+      }
+    
+      function fillSuppliers() {
+        var cur = B.f.sup.value;
+        App.clear(B.f.sup).appendChild(h('option', { value: '', text: '- supplier -' }));
+        (PW.supplierList || []).forEach(function (s) { B.f.sup.appendChild(h('option', { value: s.id, text: s.name })); });
+        B.f.sup.value = cur;
+      }
+REPLACE WITH:
+          B.bar, B.countBox, B.listBox));
+        PW.suppliers().catch(function () { return null; });
+      }
+
+----- EDIT 11  (ProcQueueBoard.html) -----
+FIND:
+        if (!qty) { f.q.pcs.focus(); throw new Error('Enter the quantity - pieces or sets.'); }
+        return App.api('pq.addStock', { itemCode: item.free ? '' : item.code, itemDesc: item.free ? item.name : '', sets: qty.sets, needBy: f.needBy.value, supplierId: f.sup.value, notes: f.notes.value }).then(function () {
+          App.toast('Added to the queue as Accepted', 'ok');
+          f.item.clear(); f.q.clear(); f.notes.value = ''; f.info.textContent = ''; f._pcs = 0; f.item.focus();
+          B.filter = 'Accepted'; B.chips.set('Accepted'); return load();
+        });
+REPLACE WITH:
+        if (!qty) { f.q.pcs.focus(); throw new Error('Enter the quantity - pieces or sets.'); }
+        return App.api('pq.addStock', { itemCode: item.free ? '' : item.code, itemDesc: item.free ? item.name : '', sets: qty.sets, needBy: f.needBy.value, notes: f.notes.value }).then(function () {
+          App.toast('Added to the queue - waiting for your decision', 'ok');
+          f.item.clear(); f.q.clear(); f.notes.value = ''; f.info.textContent = ''; f._pcs = 0; f.item.focus();
+          B.filter = 'Awaiting'; B.chips.set('Awaiting'); return load();
+        });
+
+----- EDIT 12  (ProcQueueBoard.html) -----
+FIND:
+          PW.chipCounts(B.chips, LABELS, [d.counts.awaiting, d.counts.accepted, d.counts.ordered, d.counts.denied, 0]);
+          B.countBox.textContent = d.shown + (d.shown === 1 ? ' requirement' : ' requirements') + (d.shown > d.rows.length ? ' - showing the first ' + d.rows.length : '') + ' · soonest need-by first';
+          fillSuppliers(); renderList(); renderBar();
+        }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'the queue', e); } });
+REPLACE WITH:
+          PW.chipCounts(B.chips, LABELS, [d.counts.awaiting, d.counts.accepted, d.counts.ordered, d.counts.denied, 0]);
+          B.chips.el.children[1].classList.toggle('pw-hot', d.counts.accepted > 0);     // accepted, not yet on a purchase order
+          B.countBox.textContent = d.shown + (d.shown === 1 ? ' requirement' : ' requirements') + (d.shown > d.rows.length ? ' - showing the first ' + d.rows.length : '') + ' · soonest need-by first';
+          renderList(); renderBar();
+        }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'the queue', e); } });
+
+----- EDIT 13  (ProcQueueBoard.html) -----
+FIND:
+      }
+    
+      function renderBar() {
+REPLACE WITH:
+      }
+    
+      /**
+       * Accepting asks for the supplier: choosing one confirms the acceptance. A supplier that is not in the list can be added right here.
+       * rows = the requirements being accepted (one row, or the selected rows).
+       */
+      function askSupplier(rows) {
+        var ids = rows.map(function (r) { return r.id; });
+        var same = rows.every(function (r) { return r.supplierId && r.supplierId === rows[0].supplierId; });
+        var sup = App.combo(PW.supplierPicker({ placeholder: 'Type the supplier name…', none: 'Not in the list - use "Add a new supplier" below' }));
+        if (same) (PW.supplierList || []).forEach(function (s) { if (s.id === rows[0].supplierId) sup.set(s); });
+        var nf = {
+          name: h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'Supplier company name' }),
+          contact: h('input', { class: 'inp', type: 'text', maxlength: 80, placeholder: 'Contact person' }),
+          whatsapp: h('input', { class: 'inp', type: 'tel', maxlength: 30, placeholder: 'WhatsApp / phone' }),
+          city: h('input', { class: 'inp', type: 'text', maxlength: 60, placeholder: 'City' })
+        };
+        var newBox = h('div', { hidden: true, style: 'margin-top:12px' }, h('div', { class: 'lbl', text: 'New supplier' }),
+          h('div', { class: 'grid', style: 'grid-template-columns:1fr 1fr;gap:12px' }, App.field('Company name', nf.name, { required: true }), App.field('Contact person', nf.contact), App.field('WhatsApp / phone', nf.whatsapp), App.field('City', nf.city)));
+        var toggle = h('button', { type: 'button', class: 'btn sm link', style: 'margin-top:8px', text: 'Not in the list? Add a new supplier' });
+        toggle.addEventListener('click', function () { newBox.hidden = false; toggle.hidden = true; if (!nf.name.value) nf.name.value = sup.text(); nf.name.focus(); });
+        var what = rows.length === 1 ? '“' + rows[0].item + '”' : rows.length + ' items';
+        App.modal({
+          title: 'Accept ' + (rows.length === 1 ? 'requirement' : rows.length + ' requirements'),
+          body: h('div', null, h('p', { text: 'Who will you order ' + what + ' from? Choosing the supplier accepts it.' }), App.field('Supplier', sup.el, { required: true }), toggle, newBox),
+          buttons: [{ label: 'Cancel' }, { label: 'Accept', kind: 'primary', onclick: function (api, btn) {
+            App.run(btn, function () {
+              function accept(id) { return decide(ids, 'Accepted', id).then(function () { api.close(); }); }
+              if (!newBox.hidden) {
+                if (!nf.name.value.trim()) { nf.name.focus(); throw new Error('Enter the new supplier’s company name.'); }
+                return App.api('sup.save', { name: nf.name.value, contact: nf.contact.value, whatsapp: nf.whatsapp.value, city: nf.city.value }).then(function (r) {
+                  App.toast('Supplier added: ' + nf.name.value.trim(), 'ok');
+                  return PW.suppliers(true).catch(function () { return null; }).then(function () { return accept(r.id); });
+                });
+              }
+              var chosen = sup.get();
+              if (!chosen) { sup.focus(); throw new Error('Pick the supplier from the list, or add a new one.'); }
+              return accept(chosen.id);
+            });
+          } }]
+        });
+      }
+    
+      function renderBar() {
+
+----- EDIT 14  (ProcQueueBoard.html) -----
+FIND:
+        var undecided = rows.every(function (r) { return r.state === ''; }), allAccepted = rows.every(function (r) { return r.state === 'Accepted'; });
+        var sup = PW.select([{ v: '', label: '- supplier -' }].concat((PW.supplierList || []).map(function (s) { return { v: s.id, label: s.name }; })), '', 'inp');
+        App.clear(B.bar).appendChild(h('b', { text: ids.length + ' selected' }));
+        B.bar.appendChild(h('span', { class: 'sp' }));
+        if (rows.every(function (r) { return r.state !== 'Ordered'; })) {
+          B.bar.appendChild(sup);
+          B.bar.appendChild(h('button', { type: 'button', class: 'btn soft', text: 'Set supplier', onclick: function () {
+            if (!sup.value) { App.toast('Choose the supplier first.', 'err'); return; }
+            App.api('pq.setSupplier', { ids: ids, supplierId: sup.value }).then(function (r) { App.toast('Supplier set on ' + r.done + (r.done === 1 ? ' requirement' : ' requirements'), 'ok'); return load(); }).catch(function (e) { App.toast(e.message, 'err'); });
+          } }));
+        }
+        if (undecided) {
+          B.bar.appendChild(h('button', { type: 'button', class: 'btn primary', text: 'Accept', onclick: function () { decide(ids, 'Accepted', sup.value).catch(function (e) { App.toast(e.message, 'err'); }); } }));
+          B.bar.appendChild(h('button', { type: 'button', class: 'btn danger', text: 'Deny', onclick: function () { decide(ids, 'Denied').catch(function (e) { App.toast(e.message, 'err'); }); } }));
+REPLACE WITH:
+        var undecided = rows.every(function (r) { return r.state === ''; }), allAccepted = rows.every(function (r) { return r.state === 'Accepted'; });
+        App.clear(B.bar).appendChild(h('b', { text: ids.length + ' selected' }));
+        B.bar.appendChild(h('span', { class: 'sp' }));
+        if (undecided) {
+          B.bar.appendChild(h('button', { type: 'button', class: 'btn primary', text: 'Accept', onclick: function () { askSupplier(rows); } }));
+          B.bar.appendChild(h('button', { type: 'button', class: 'btn danger', text: 'Deny', onclick: function () { decide(ids, 'Denied').catch(function (e) { App.toast(e.message, 'err'); }); } }));
+
+----- EDIT 15  (ProcQueueBoard.html) -----
+FIND:
+      }
+      function rowEl(r) {
+REPLACE WITH:
+      }
+      function showSup() { return B.filter !== 'Awaiting'; }      // while reviewing there is no supplier yet, so no supplier column
+      function rowEl(r) {
+
+----- EDIT 16  (ProcQueueBoard.html) -----
+FIND:
+        cb.addEventListener('change', function () { B.sel[r.id] = cb.checked; renderBar(); });
+        var supCell;
+        if (r.state === 'Ordered') supCell = r.supplier || h('span', { class: 'dash', text: '–' });
+        else {
+          var sel = PW.select([{ v: '', label: '- supplier -' }].concat((PW.supplierList || []).map(function (s) { return { v: s.id, label: s.name }; })), r.supplierId, 'inp sm pw-sup');
+          sel.addEventListener('change', function () {
+            sel.disabled = true;
+            App.api('pq.setSupplier', { ids: [r.id], supplierId: sel.value }).then(function () { r.supplierId = sel.value; App.toast('Supplier updated', 'ok'); })
+              .catch(function (e) { sel.value = r.supplierId; App.toast(e.message, 'err'); }).then(function () { sel.disabled = false; });
+          });
+          supCell = sel;
+        }
+        var act = [];
+        if (r.state === '') {
+          act.push(h('button', { type: 'button', class: 'btn sm primary', text: 'Accept', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Accepted', r.supplierId); }); } }));
+          act.push(h('button', { type: 'button', class: 'btn sm danger', text: 'Deny', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Denied'); }); } }));
+        } else if (r.state === 'Accepted') {
+          act.push(h('button', { type: 'button', class: 'btn sm soft', text: 'Make PO', onclick: function () { makePo([r]); } }));
+          act.push(h('button', { type: 'button', class: 'btn sm', text: 'Deny', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Denied'); }); } }));
+REPLACE WITH:
+        cb.addEventListener('change', function () { B.sel[r.id] = cb.checked; renderBar(); });
+        var supCell = r.supplier ? [r.supplier] : h('span', { class: 'dash', text: '–' });
+        if (r.state === 'Accepted') supCell = [r.supplier || h('span', { class: 'late', text: 'No supplier' }), h('button', { type: 'button', class: 'btn sm link', text: 'Change', onclick: function () { askSupplier([r]); } })];
+        var act = [];
+        if (r.state === '') {
+          act.push(h('button', { type: 'button', class: 'btn sm primary', text: 'Accept', onclick: function () { askSupplier([r]); } }));
+          act.push(h('button', { type: 'button', class: 'btn sm danger', text: 'Deny', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Denied'); }); } }));
+        } else if (r.state === 'Accepted') {
+          act.push(h('button', { type: 'button', class: 'btn sm primary', text: 'Make PO', onclick: function () { makePo([r]); } }));
+          act.push(h('button', { type: 'button', class: 'btn sm', text: 'Deny', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Denied'); }); } }));
+
+----- EDIT 17  (ProcQueueBoard.html) -----
+FIND:
+        } else act.push(h('button', { type: 'button', class: 'btn sm link', text: r.poNo || 'Open PO', onclick: function () { App.go('purchase', { open: r.poId }); } }));
+        return h('tr', { class: B.sel[r.id] ? 'sel' : '' },
+          h('td', { class: 'pw-c' }, cb),
+REPLACE WITH:
+        } else act.push(h('button', { type: 'button', class: 'btn sm link', text: r.poNo || 'Open PO', onclick: function () { App.go('purchase', { open: r.poId }); } }));
+        return h('tr', { class: (B.sel[r.id] ? 'sel' : '') + (r.state === 'Accepted' ? ' pw-ready' : '') },
+          h('td', { class: 'pw-c' }, cb),
+
+----- EDIT 18  (ProcQueueBoard.html) -----
+FIND:
+          h('td', { 'data-l': 'Need by' }, r.needBy ? [App.fmtDate(r.needBy), late ? h('span', { class: 'sub late', text: 'Overdue' }) : null] : h('span', { class: 'dash', text: '–' })),
+          h('td', { 'data-l': 'Supplier' }, supCell),
+          h('td', { 'data-l': 'Status' }, stateBadge(r.state), r.poNo ? h('span', { class: 'sub', text: 'PO ' + r.poNo }) : null, r.quoteNo ? h('span', { class: 'sub', text: 'Quote ' + r.quoteNo }) : null),
+          h('td', { 'data-l': 'Notes' }, r.notes ? h('div', { class: 'clip', title: r.notes, text: r.notes }) : h('span', { class: 'dash', text: '–' })),
+REPLACE WITH:
+          h('td', { 'data-l': 'Need by' }, r.needBy ? [App.fmtDate(r.needBy), late ? h('span', { class: 'sub late', text: 'Overdue' }) : null] : h('span', { class: 'dash', text: '–' })),
+          showSup() ? h('td', { 'data-l': 'Supplier' }, supCell) : null,
+          h('td', { 'data-l': 'Status' }, stateBadge(r.state), r.state === 'Accepted' ? h('span', { class: 'sub pw-todo', text: 'Ready to order' }) : null, r.poNo ? h('span', { class: 'sub', text: 'PO ' + r.poNo }) : null, r.quoteNo ? h('span', { class: 'sub', text: 'Quote ' + r.quoteNo }) : null),
+          h('td', { 'data-l': 'Notes' }, r.notes ? h('div', { class: 'clip', title: r.notes, text: r.notes }) : h('span', { class: 'dash', text: '–' })),
+
+----- EDIT 19  (ProcQueueBoard.html) -----
+FIND:
+        App.clear(B.listBox);
+        if (!B.rows.length) { B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: B.filter === 'Awaiting' ? 'Nothing is waiting for a decision.' : 'No requirements found.' }))); return; }
+REPLACE WITH:
+        App.clear(B.listBox);
+        if (B.filter === 'Accepted' && B.rows.length) B.listBox.appendChild(h('div', { class: 'note pw-banner' }, h('b', { text: B.rows.length + (B.rows.length === 1 ? ' item is' : ' items are') + ' accepted but not ordered yet. ' }), 'Select them and press Make purchase order.'));
+        if (!B.rows.length) { B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: B.filter === 'Awaiting' ? 'Nothing is waiting for a decision.' : 'No requirements found.' }))); return; }
+
+----- EDIT 20  (ProcQueueBoard.html) -----
+FIND:
+        var head = h('tr', null, h('th', { class: 'pw-c' }, all), h('th', { text: 'Date' }), h('th', { text: 'For' }), h('th', { text: 'Item' }), h('th', { class: 'num', text: 'Qty' }),
+          h('th', { text: 'Need by' }), h('th', { text: 'Supplier' }), h('th', { text: 'Status' }), h('th', { text: 'Notes' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+        var body = h('tbody');
+REPLACE WITH:
+        var head = h('tr', null, h('th', { class: 'pw-c' }, all), h('th', { text: 'Date' }), h('th', { text: 'For' }), h('th', { text: 'Item' }), h('th', { class: 'num', text: 'Qty' }),
+          h('th', { text: 'Need by' }), showSup() ? h('th', { text: 'Supplier' }) : null, h('th', { text: 'Status' }), h('th', { text: 'Notes' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+        var body = h('tbody');
+
+----- EDIT 21  (ProcQueueBoard.html) -----
+FIND:
+            if (!g.length) return;
+            body.appendChild(h('tr', { class: 'grp' }, h('td', { colspan: '10' }, h('div', { class: 'gh' }, stateBadge(s), h('span', { class: 'gc', text: String(g.length) }), h('span', { class: 'm', text: GROUP_NOTE[s] })))));
+            g.forEach(function (r) { body.appendChild(rowEl(r)); });
+REPLACE WITH:
+            if (!g.length) return;
+            body.appendChild(h('tr', { class: 'grp' }, h('td', { colspan: showSup() ? '10' : '9' }, h('div', { class: 'gh' }, stateBadge(s), h('span', { class: 'gc', text: String(g.length) }), h('span', { class: 'm', text: GROUP_NOTE[s] })))));
+            g.forEach(function (r) { body.appendChild(rowEl(r)); });
+
+########################################################################################
+# FILE: DeptStyles.html
+########################################################################################
+
+----- EDIT 22  (DeptStyles.html) -----
+FIND:
+    .t td .inp.sm.pw-n{width:92px}
+    
+    /* location chips (Stock, Put-away) */
+REPLACE WITH:
+    .t td .inp.sm.pw-n{width:92px}
+    
+    /* Purchase queue: accepted but not ordered yet stands out */
+    .t tr.pw-ready td{background:#F1FAF5;border-color:#BCE3CD}
+    .t tr.pw-ready td:first-child{box-shadow:inset 5px 0 0 var(--ok)}
+    .t tr.pw-ready.sel td{background:#E3F5EA}
+    .pw-todo{color:var(--ok)!important;font-weight:700!important}
+    .seg.chips-s .seg-b.pw-hot:not(.on){background:var(--ok-l);border-color:var(--ok);color:var(--ok)}
+    .pw-banner{background:var(--ok-l);color:var(--ok);margin:10px 0 0}
+    
+    /* location chips (Stock, Put-away) */

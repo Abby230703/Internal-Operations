@@ -1,5 +1,5 @@
 ##############################################################################
-# HOSPI OPS - PROCUREMENT + WAREHOUSE : ALL FILES IN ONE PLACE  (version 2)
+# HOSPI OPS - PROCUREMENT + WAREHOUSE : ALL FILES IN ONE PLACE  (version 3)
 ##############################################################################
 
 HOW TO USE
@@ -726,21 +726,26 @@ var ProcApi = {
     return ids.filter(function (id) { return by[id]; }).map(function (id) { return by[id]; });
   },
 
-  /** The purchase manager's call. args: { ids, decision: Accepted|Denied|'' (back to the queue), supplierId? } */
+  /**
+   * The purchase manager's call. args: { ids, decision: Accepted|Denied|'' (back to the queue), supplierId }
+   * Accepting needs a supplier: choosing the supplier is what confirms the acceptance. A requirement that already
+   * has a supplier keeps it when none is sent.
+   */
   pqDecide: function (a) {
     var d = U.s(a.decision), ids = Rows.ids(a.ids), sid = U.s(a.supplierId);
     if (['Accepted', 'Denied', ''].indexOf(d) < 0) throw new Error('Decision must be Accepted or Denied.');
     if (!ids.length) throw new Error('Pick at least one requirement.');
     if (sid && !ProcApi.suppliers_().by[sid]) throw new Error('That supplier no longer exists.');
-    var done = 0, skipped = 0;
-    ProcApi.reqsByIds_(ids).forEach(function (r) {
-      if (U.s(r['PO ID'])) { skipped++; return; }          // already on a purchase order: its status cannot change
+    var rows = ProcApi.reqsByIds_(ids).filter(function (r) { return !U.s(r['PO ID']); }), skipped = ids.length - rows.length;
+    if (d === 'Accepted') {
+      rows.forEach(function (r) { if (!sid && !U.s(r['Supplier'])) throw new Error('Choose the supplier to accept this requirement.'); });
+    }
+    rows.forEach(function (r) {                       // a requirement already on a purchase order cannot change (skipped above)
       var upd = { 'Status': d };
       if (d === 'Accepted' && sid) upd['Supplier'] = sid;
       Db.update('requirements', r._row, upd);
-      done++;
     });
-    return { done: done, skipped: skipped };
+    return { done: rows.length, skipped: skipped };
   },
 
   /** args: { ids, supplierId ('' clears) } */
@@ -755,18 +760,17 @@ var ProcApi = {
     return { done: done };
   },
 
-  /** A stock need raised by Procurement itself (no customer or lead). The person adding it is the decider, so it starts Accepted. */
+  /** A stock need raised by Procurement itself (no customer or lead). It joins the queue and waits for the decision like any other. */
   pqAddStock: function (a, user) {
-    var code = U.s(a.itemCode), desc = U.s(a.itemDesc), sets = U.toNum(a.sets), sid = U.s(a.supplierId), raw = '';
+    var code = U.s(a.itemCode), desc = U.s(a.itemDesc), sets = U.toNum(a.sets), raw = '';
     if (code) { raw = Items.raw(code); if (raw === null) throw new Error('Item ' + code + ' is not in Products.'); desc = ''; }
     else if (!desc) throw new Error('Pick an item, or type the name of a new item.');
     if (!(sets > 0)) throw new Error('Enter the quantity.');
-    if (sid && !ProcApi.suppliers_().by[sid]) throw new Error('That supplier no longer exists.');
     var need = '';
     if (U.s(a.needBy)) { need = U.dateFromIso(a.needBy); if (!need) throw new Error('"Need by" date is not valid.'); }
     var id = U.newId(U.idSet(Db.readAll('requirements'), 'Req ID'));
     Db.append('requirements', [{
-      'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need, 'Supplier': sid, 'Status': 'Accepted',
+      'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need,
       'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
     }]);
     return { id: id };
@@ -1915,6 +1919,14 @@ var WhApi = {
 .t td select.inp.sm.pw-sup{min-width:150px}
 .t td .inp.sm.pw-n{width:92px}
 
+/* Purchase queue: accepted but not ordered yet stands out */
+.t tr.pw-ready td{background:#F1FAF5;border-color:#BCE3CD}
+.t tr.pw-ready td:first-child{box-shadow:inset 5px 0 0 var(--ok)}
+.t tr.pw-ready.sel td{background:#E3F5EA}
+.pw-todo{color:var(--ok)!important;font-weight:700!important}
+.seg.chips-s .seg-b.pw-hot:not(.on){background:var(--ok-l);border-color:var(--ok);color:var(--ok)}
+.pw-banner{background:var(--ok-l);color:var(--ok);margin:10px 0 0}
+
 /* location chips (Stock, Put-away) */
 .pw-locs{display:flex;gap:6px;flex-wrap:wrap}
 .pw-chip{font:700 12px var(--sans);background:var(--indigo-l);color:var(--indigo-d);border-radius:99px;padding:3px 10px;white-space:nowrap}
@@ -1964,7 +1976,7 @@ var WhApi = {
   var App = window.App, h = App.h, PW = window.PW;
   if (!PW.active('procurement')) return;
   var STATES = ['', 'Accepted', 'Ordered', 'Denied'];
-  var GROUP_NOTE = { '': 'Waiting for your decision', 'Accepted': 'Accepted - ready to put on a purchase order', 'Ordered': 'On a purchase order', 'Denied': 'Declined' };
+  var GROUP_NOTE = { '': 'Waiting for your decision', 'Accepted': 'Accepted - still to be put on a purchase order', 'Ordered': 'On a purchase order', 'Denied': 'Declined' };
   var LABELS = ['Awaiting decision', 'Accepted', 'Ordered', 'Denied', 'All'];
   var B = { f: {}, filter: 'Awaiting', search: '', seq: 0, rows: [], counts: {}, sel: {}, listBox: null, countBox: null, bar: null, chips: null };
 
@@ -1974,17 +1986,16 @@ var WhApi = {
     f.info = h('div', { class: 'hint' });
     f.q = App.qty({ perSet: function () { return f._pcs; } });
     f.needBy = h('input', { class: 'inp', type: 'date' });
-    f.sup = PW.select([{ v: '', label: '- supplier -' }], '', 'inp');
     f.notes = h('input', { class: 'inp', type: 'text', maxlength: 300, placeholder: 'Optional' });
     var saveBtn = h('button', { type: 'button', class: 'btn primary', text: 'Add to queue' });
     saveBtn.addEventListener('click', function () { App.run(saveBtn, addStock); });
     [f.q.pcs, f.q.sets, f.needBy, f.notes].forEach(function (el) { el.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); } }); });
     var form = h('div', { class: 'card', style: 'padding:20px 24px 22px' },
       h('div', { class: 'chead', style: 'margin-bottom:14px' }, h('h2', { text: 'Stock top-up' }),
-        h('span', { class: 'mute', style: 'font-size:13px', text: 'An item you want in stock with no customer behind it. It goes straight to Accepted.' })),
-      h('div', { class: 'quick', style: 'grid-template-columns:minmax(220px,2fr) 96px 96px 150px minmax(140px,1fr) minmax(120px,1fr) auto' },
+        h('span', { class: 'mute', style: 'font-size:13px', text: 'An item you want in stock with no customer behind it. It joins the queue below, waiting for your decision.' })),
+      h('div', { class: 'quick', style: 'grid-template-columns:minmax(220px,2fr) 96px 96px 150px minmax(140px,1fr) auto' },
         App.field('Item', f.item.el, { required: true, hint: f.info }), App.field('Pieces', f.q.pcs, { required: true }), App.field('or Sets', f.q.sets),
-        App.field('Need by', f.needBy), App.field('Supplier', f.sup), App.field('Notes', f.notes), saveBtn));
+        App.field('Need by', f.needBy), App.field('Notes', f.notes), saveBtn));
 
     B.chips = App.seg({
       cls: 'chips-s', label: 'Filter requirements',
@@ -2001,14 +2012,7 @@ var WhApi = {
       h('div', { class: 'toolbar' }, h('h2', { text: 'Requirements' }), B.chips.el, h('div', { class: 'sx grow' }, App.icon('search'), search),
         h('button', { type: 'button', class: 'btn', text: 'Refresh', onclick: load })),
       B.bar, B.countBox, B.listBox));
-    PW.suppliers().then(fillSuppliers).catch(function () { return null; });
-  }
-
-  function fillSuppliers() {
-    var cur = B.f.sup.value;
-    App.clear(B.f.sup).appendChild(h('option', { value: '', text: '- supplier -' }));
-    (PW.supplierList || []).forEach(function (s) { B.f.sup.appendChild(h('option', { value: s.id, text: s.name })); });
-    B.f.sup.value = cur;
+    PW.suppliers().catch(function () { return null; });
   }
   function itemChanged(it) {
     var f = B.f;
@@ -2027,10 +2031,10 @@ var WhApi = {
     var f = B.f, item = f.item.get(), qty = f.q.get();
     if (!item) { f.item.focus(); throw new Error('Pick an item, or type the name of a new item.'); }
     if (!qty) { f.q.pcs.focus(); throw new Error('Enter the quantity - pieces or sets.'); }
-    return App.api('pq.addStock', { itemCode: item.free ? '' : item.code, itemDesc: item.free ? item.name : '', sets: qty.sets, needBy: f.needBy.value, supplierId: f.sup.value, notes: f.notes.value }).then(function () {
-      App.toast('Added to the queue as Accepted', 'ok');
+    return App.api('pq.addStock', { itemCode: item.free ? '' : item.code, itemDesc: item.free ? item.name : '', sets: qty.sets, needBy: f.needBy.value, notes: f.notes.value }).then(function () {
+      App.toast('Added to the queue - waiting for your decision', 'ok');
       f.item.clear(); f.q.clear(); f.notes.value = ''; f.info.textContent = ''; f._pcs = 0; f.item.focus();
-      B.filter = 'Accepted'; B.chips.set('Accepted'); return load();
+      B.filter = 'Awaiting'; B.chips.set('Awaiting'); return load();
     });
   }
 
@@ -2044,8 +2048,9 @@ var WhApi = {
       Object.keys(B.sel).forEach(function (id) { if (!d.rows.some(function (r) { return r.id === id; })) delete B.sel[id]; });
       App.setAttn('requirements', { awaiting: d.counts.awaiting });
       PW.chipCounts(B.chips, LABELS, [d.counts.awaiting, d.counts.accepted, d.counts.ordered, d.counts.denied, 0]);
+      B.chips.el.children[1].classList.toggle('pw-hot', d.counts.accepted > 0);     // accepted, not yet on a purchase order
       B.countBox.textContent = d.shown + (d.shown === 1 ? ' requirement' : ' requirements') + (d.shown > d.rows.length ? ' - showing the first ' + d.rows.length : '') + ' · soonest need-by first';
-      fillSuppliers(); renderList(); renderBar();
+      renderList(); renderBar();
     }).catch(function (e) { if (seq === B.seq) { B.countBox.textContent = ''; PW.loadError(B.listBox, 'the queue', e); } });
   }
 
@@ -2065,23 +2070,56 @@ var WhApi = {
     App.go('purchase', { reqIds: rows.map(function (r) { return r.id; }), supplierId: one });
   }
 
+  /**
+   * Accepting asks for the supplier: choosing one confirms the acceptance. A supplier that is not in the list can be added right here.
+   * rows = the requirements being accepted (one row, or the selected rows).
+   */
+  function askSupplier(rows) {
+    var ids = rows.map(function (r) { return r.id; });
+    var same = rows.every(function (r) { return r.supplierId && r.supplierId === rows[0].supplierId; });
+    var sup = App.combo(PW.supplierPicker({ placeholder: 'Type the supplier name…', none: 'Not in the list - use "Add a new supplier" below' }));
+    if (same) (PW.supplierList || []).forEach(function (s) { if (s.id === rows[0].supplierId) sup.set(s); });
+    var nf = {
+      name: h('input', { class: 'inp', type: 'text', maxlength: 120, placeholder: 'Supplier company name' }),
+      contact: h('input', { class: 'inp', type: 'text', maxlength: 80, placeholder: 'Contact person' }),
+      whatsapp: h('input', { class: 'inp', type: 'tel', maxlength: 30, placeholder: 'WhatsApp / phone' }),
+      city: h('input', { class: 'inp', type: 'text', maxlength: 60, placeholder: 'City' })
+    };
+    var newBox = h('div', { hidden: true, style: 'margin-top:12px' }, h('div', { class: 'lbl', text: 'New supplier' }),
+      h('div', { class: 'grid', style: 'grid-template-columns:1fr 1fr;gap:12px' }, App.field('Company name', nf.name, { required: true }), App.field('Contact person', nf.contact), App.field('WhatsApp / phone', nf.whatsapp), App.field('City', nf.city)));
+    var toggle = h('button', { type: 'button', class: 'btn sm link', style: 'margin-top:8px', text: 'Not in the list? Add a new supplier' });
+    toggle.addEventListener('click', function () { newBox.hidden = false; toggle.hidden = true; if (!nf.name.value) nf.name.value = sup.text(); nf.name.focus(); });
+    var what = rows.length === 1 ? '“' + rows[0].item + '”' : rows.length + ' items';
+    App.modal({
+      title: 'Accept ' + (rows.length === 1 ? 'requirement' : rows.length + ' requirements'),
+      body: h('div', null, h('p', { text: 'Who will you order ' + what + ' from? Choosing the supplier accepts it.' }), App.field('Supplier', sup.el, { required: true }), toggle, newBox),
+      buttons: [{ label: 'Cancel' }, { label: 'Accept', kind: 'primary', onclick: function (api, btn) {
+        App.run(btn, function () {
+          function accept(id) { return decide(ids, 'Accepted', id).then(function () { api.close(); }); }
+          if (!newBox.hidden) {
+            if (!nf.name.value.trim()) { nf.name.focus(); throw new Error('Enter the new supplier’s company name.'); }
+            return App.api('sup.save', { name: nf.name.value, contact: nf.contact.value, whatsapp: nf.whatsapp.value, city: nf.city.value }).then(function (r) {
+              App.toast('Supplier added: ' + nf.name.value.trim(), 'ok');
+              return PW.suppliers(true).catch(function () { return null; }).then(function () { return accept(r.id); });
+            });
+          }
+          var chosen = sup.get();
+          if (!chosen) { sup.focus(); throw new Error('Pick the supplier from the list, or add a new one.'); }
+          return accept(chosen.id);
+        });
+      } }]
+    });
+  }
+
   function renderBar() {
     var ids = selIds(), rows = selRows();
     B.bar.hidden = !ids.length;
     if (!ids.length) return;
     var undecided = rows.every(function (r) { return r.state === ''; }), allAccepted = rows.every(function (r) { return r.state === 'Accepted'; });
-    var sup = PW.select([{ v: '', label: '- supplier -' }].concat((PW.supplierList || []).map(function (s) { return { v: s.id, label: s.name }; })), '', 'inp');
     App.clear(B.bar).appendChild(h('b', { text: ids.length + ' selected' }));
     B.bar.appendChild(h('span', { class: 'sp' }));
-    if (rows.every(function (r) { return r.state !== 'Ordered'; })) {
-      B.bar.appendChild(sup);
-      B.bar.appendChild(h('button', { type: 'button', class: 'btn soft', text: 'Set supplier', onclick: function () {
-        if (!sup.value) { App.toast('Choose the supplier first.', 'err'); return; }
-        App.api('pq.setSupplier', { ids: ids, supplierId: sup.value }).then(function (r) { App.toast('Supplier set on ' + r.done + (r.done === 1 ? ' requirement' : ' requirements'), 'ok'); return load(); }).catch(function (e) { App.toast(e.message, 'err'); });
-      } }));
-    }
     if (undecided) {
-      B.bar.appendChild(h('button', { type: 'button', class: 'btn primary', text: 'Accept', onclick: function () { decide(ids, 'Accepted', sup.value).catch(function (e) { App.toast(e.message, 'err'); }); } }));
+      B.bar.appendChild(h('button', { type: 'button', class: 'btn primary', text: 'Accept', onclick: function () { askSupplier(rows); } }));
       B.bar.appendChild(h('button', { type: 'button', class: 'btn danger', text: 'Deny', onclick: function () { decide(ids, 'Denied').catch(function (e) { App.toast(e.message, 'err'); }); } }));
     }
     if (allAccepted) B.bar.appendChild(h('button', { type: 'button', class: 'btn primary', text: 'Make purchase order', onclick: function () { makePo(rows); } }));
@@ -2100,59 +2138,52 @@ var WhApi = {
     if (s.onOrder) bits.push('on order ' + App.fmtQty(s.onOrder));
     return h('span', { class: 'sub' + (s.avail !== '' && s.avail < 0 ? ' late' : ''), text: bits.join(' · ') + ' pcs' });
   }
+  function showSup() { return B.filter !== 'Awaiting'; }      // while reviewing there is no supplier yet, so no supplier column
   function rowEl(r) {
     var q = App.qtyOf(r.sets, r.itemCode), today = App.today(), late = r.needBy && r.needBy < today && (r.state === '' || r.state === 'Accepted');
     var cb = h('input', { type: 'checkbox', 'aria-label': 'Select ' + r.item, disabled: r.state === 'Ordered' });
     cb.checked = !!B.sel[r.id];
     cb.addEventListener('change', function () { B.sel[r.id] = cb.checked; renderBar(); });
-    var supCell;
-    if (r.state === 'Ordered') supCell = r.supplier || h('span', { class: 'dash', text: '–' });
-    else {
-      var sel = PW.select([{ v: '', label: '- supplier -' }].concat((PW.supplierList || []).map(function (s) { return { v: s.id, label: s.name }; })), r.supplierId, 'inp sm pw-sup');
-      sel.addEventListener('change', function () {
-        sel.disabled = true;
-        App.api('pq.setSupplier', { ids: [r.id], supplierId: sel.value }).then(function () { r.supplierId = sel.value; App.toast('Supplier updated', 'ok'); })
-          .catch(function (e) { sel.value = r.supplierId; App.toast(e.message, 'err'); }).then(function () { sel.disabled = false; });
-      });
-      supCell = sel;
-    }
+    var supCell = r.supplier ? [r.supplier] : h('span', { class: 'dash', text: '–' });
+    if (r.state === 'Accepted') supCell = [r.supplier || h('span', { class: 'late', text: 'No supplier' }), h('button', { type: 'button', class: 'btn sm link', text: 'Change', onclick: function () { askSupplier([r]); } })];
     var act = [];
     if (r.state === '') {
-      act.push(h('button', { type: 'button', class: 'btn sm primary', text: 'Accept', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Accepted', r.supplierId); }); } }));
+      act.push(h('button', { type: 'button', class: 'btn sm primary', text: 'Accept', onclick: function () { askSupplier([r]); } }));
       act.push(h('button', { type: 'button', class: 'btn sm danger', text: 'Deny', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Denied'); }); } }));
     } else if (r.state === 'Accepted') {
-      act.push(h('button', { type: 'button', class: 'btn sm soft', text: 'Make PO', onclick: function () { makePo([r]); } }));
+      act.push(h('button', { type: 'button', class: 'btn sm primary', text: 'Make PO', onclick: function () { makePo([r]); } }));
       act.push(h('button', { type: 'button', class: 'btn sm', text: 'Deny', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], 'Denied'); }); } }));
     } else if (r.state === 'Denied') {
       act.push(h('button', { type: 'button', class: 'btn sm', text: 'Reopen', onclick: function (e) { App.run(e.currentTarget, function () { return decide([r.id], ''); }); } }));
     } else act.push(h('button', { type: 'button', class: 'btn sm link', text: r.poNo || 'Open PO', onclick: function () { App.go('purchase', { open: r.poId }); } }));
-    return h('tr', { class: B.sel[r.id] ? 'sel' : '' },
+    return h('tr', { class: (B.sel[r.id] ? 'sel' : '') + (r.state === 'Accepted' ? ' pw-ready' : '') },
       h('td', { class: 'pw-c' }, cb),
       h('td', { 'data-l': 'Date', text: App.fmtDate(r.date) }),
       h('td', { 'data-l': 'For' }, r.party ? [h('b', { text: r.party }), h('span', { class: 'sub', text: r.forType })] : [h('b', { text: 'Stock' }), h('span', { class: 'sub', text: r.salesman })]),
       h('td', { 'data-l': 'Item' }, r.item, h('span', { class: 'sub', text: r.isNew ? 'New item - not in Products yet' : r.itemCode }), stockLine(r)),
       h('td', { class: 'num', 'data-l': 'Qty' }, q.main, q.sub ? h('span', { class: 'sub', text: q.sub }) : null),
       h('td', { 'data-l': 'Need by' }, r.needBy ? [App.fmtDate(r.needBy), late ? h('span', { class: 'sub late', text: 'Overdue' }) : null] : h('span', { class: 'dash', text: '–' })),
-      h('td', { 'data-l': 'Supplier' }, supCell),
-      h('td', { 'data-l': 'Status' }, stateBadge(r.state), r.poNo ? h('span', { class: 'sub', text: 'PO ' + r.poNo }) : null, r.quoteNo ? h('span', { class: 'sub', text: 'Quote ' + r.quoteNo }) : null),
+      showSup() ? h('td', { 'data-l': 'Supplier' }, supCell) : null,
+      h('td', { 'data-l': 'Status' }, stateBadge(r.state), r.state === 'Accepted' ? h('span', { class: 'sub pw-todo', text: 'Ready to order' }) : null, r.poNo ? h('span', { class: 'sub', text: 'PO ' + r.poNo }) : null, r.quoteNo ? h('span', { class: 'sub', text: 'Quote ' + r.quoteNo }) : null),
       h('td', { 'data-l': 'Notes' }, r.notes ? h('div', { class: 'clip', title: r.notes, text: r.notes }) : h('span', { class: 'dash', text: '–' })),
       h('td', { class: 'acts' }, act));
   }
   function renderList() {
     App.clear(B.listBox);
+    if (B.filter === 'Accepted' && B.rows.length) B.listBox.appendChild(h('div', { class: 'note pw-banner' }, h('b', { text: B.rows.length + (B.rows.length === 1 ? ' item is' : ' items are') + ' accepted but not ordered yet. ' }), 'Select them and press Make purchase order.'));
     if (!B.rows.length) { B.listBox.appendChild(h('div', { class: 'tablewrap' }, h('div', { class: 'empty', text: B.filter === 'Awaiting' ? 'Nothing is waiting for a decision.' : 'No requirements found.' }))); return; }
     var all = h('input', { type: 'checkbox', 'aria-label': 'Select all' });
     var selectable = B.rows.filter(function (r) { return r.state !== 'Ordered'; });
     all.checked = selectable.length > 0 && selectable.every(function (r) { return B.sel[r.id]; });
     all.addEventListener('change', function () { selectable.forEach(function (r) { B.sel[r.id] = all.checked; }); renderList(); renderBar(); });
     var head = h('tr', null, h('th', { class: 'pw-c' }, all), h('th', { text: 'Date' }), h('th', { text: 'For' }), h('th', { text: 'Item' }), h('th', { class: 'num', text: 'Qty' }),
-      h('th', { text: 'Need by' }), h('th', { text: 'Supplier' }), h('th', { text: 'Status' }), h('th', { text: 'Notes' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
+      h('th', { text: 'Need by' }), showSup() ? h('th', { text: 'Supplier' }) : null, h('th', { text: 'Status' }), h('th', { text: 'Notes' }), h('th', null, h('span', { class: 'sr', text: 'Actions' })));
     var body = h('tbody');
     if (B.filter === 'All') {
       STATES.forEach(function (s) {
         var g = B.rows.filter(function (r) { return r.state === s; });
         if (!g.length) return;
-        body.appendChild(h('tr', { class: 'grp' }, h('td', { colspan: '10' }, h('div', { class: 'gh' }, stateBadge(s), h('span', { class: 'gc', text: String(g.length) }), h('span', { class: 'm', text: GROUP_NOTE[s] })))));
+        body.appendChild(h('tr', { class: 'grp' }, h('td', { colspan: showSup() ? '10' : '9' }, h('div', { class: 'gh' }, stateBadge(s), h('span', { class: 'gc', text: String(g.length) }), h('span', { class: 'm', text: GROUP_NOTE[s] })))));
         g.forEach(function (r) { body.appendChild(rowEl(r)); });
       });
     } else B.rows.forEach(function (r) { body.appendChild(rowEl(r)); });
@@ -3378,7 +3409,7 @@ Changed (your files, with the edits marked `PW:` in the code):
 
 ## How it works
 
-**Procurement.** Sales requirements arrive in the Purchase queue (blank status). The purchase manager accepts or denies each one (`Requirements.Status`), picks the supplier, and uses *Make PO*. A PO is a draft until *Send*: sending sets `Status = Sent` (this is what makes it "On Order"), makes the PDF, and opens the goods receipt (GRN + one line per PO line, "Yet to receive") for the Warehouse. Removing a line from a draft, or deleting a draft, puts its requirement back in the queue. *Stock top-up* lets Procurement raise a need with no customer behind it; it starts as Accepted.
+**Procurement.** Sales requirements arrive in the Purchase queue (blank status). The purchase manager accepts or denies each one (`Requirements.Status`). *Accept* opens a pop-up where the supplier is chosen (or a new one added on the spot); choosing the supplier is what confirms the acceptance. Accepted items that are not on a PO yet are highlighted, and *Make PO* puts them on one. A PO is a draft until *Send*: sending sets `Status = Sent` (this is what makes it "On Order"), makes the PDF, and opens the goods receipt (GRN + one line per PO line, "Yet to receive") for the Warehouse. Removing a line from a draft, or deleting a draft, puts its requirement back in the queue. *Stock top-up* lets Procurement raise a need with no customer behind it; it joins the queue as awaiting decision like any other requirement.
 
 **Warehouse, inward.** *Receiving*: count the delivery (pieces or sets), note damaged pieces, sticker, then *Mark as received* (this fills `Received Date`). An item that arrived but was not on the PO can be added. *Put-away*: choose a location and pieces per line; part put-away splits the line so the PO's `Open Sets` stays correct.
 

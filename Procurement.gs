@@ -128,21 +128,26 @@ var ProcApi = {
     return ids.filter(function (id) { return by[id]; }).map(function (id) { return by[id]; });
   },
 
-  /** The purchase manager's call. args: { ids, decision: Accepted|Denied|'' (back to the queue), supplierId? } */
+  /**
+   * The purchase manager's call. args: { ids, decision: Accepted|Denied|'' (back to the queue), supplierId }
+   * Accepting needs a supplier: choosing the supplier is what confirms the acceptance. A requirement that already
+   * has a supplier keeps it when none is sent.
+   */
   pqDecide: function (a) {
     var d = U.s(a.decision), ids = Rows.ids(a.ids), sid = U.s(a.supplierId);
     if (['Accepted', 'Denied', ''].indexOf(d) < 0) throw new Error('Decision must be Accepted or Denied.');
     if (!ids.length) throw new Error('Pick at least one requirement.');
     if (sid && !ProcApi.suppliers_().by[sid]) throw new Error('That supplier no longer exists.');
-    var done = 0, skipped = 0;
-    ProcApi.reqsByIds_(ids).forEach(function (r) {
-      if (U.s(r['PO ID'])) { skipped++; return; }          // already on a purchase order: its status cannot change
+    var rows = ProcApi.reqsByIds_(ids).filter(function (r) { return !U.s(r['PO ID']); }), skipped = ids.length - rows.length;
+    if (d === 'Accepted') {
+      rows.forEach(function (r) { if (!sid && !U.s(r['Supplier'])) throw new Error('Choose the supplier to accept this requirement.'); });
+    }
+    rows.forEach(function (r) {                       // a requirement already on a purchase order cannot change (skipped above)
       var upd = { 'Status': d };
       if (d === 'Accepted' && sid) upd['Supplier'] = sid;
       Db.update('requirements', r._row, upd);
-      done++;
     });
-    return { done: done, skipped: skipped };
+    return { done: rows.length, skipped: skipped };
   },
 
   /** args: { ids, supplierId ('' clears) } */
@@ -157,18 +162,17 @@ var ProcApi = {
     return { done: done };
   },
 
-  /** A stock need raised by Procurement itself (no customer or lead). The person adding it is the decider, so it starts Accepted. */
+  /** A stock need raised by Procurement itself (no customer or lead). It joins the queue and waits for the decision like any other. */
   pqAddStock: function (a, user) {
-    var code = U.s(a.itemCode), desc = U.s(a.itemDesc), sets = U.toNum(a.sets), sid = U.s(a.supplierId), raw = '';
+    var code = U.s(a.itemCode), desc = U.s(a.itemDesc), sets = U.toNum(a.sets), raw = '';
     if (code) { raw = Items.raw(code); if (raw === null) throw new Error('Item ' + code + ' is not in Products.'); desc = ''; }
     else if (!desc) throw new Error('Pick an item, or type the name of a new item.');
     if (!(sets > 0)) throw new Error('Enter the quantity.');
-    if (sid && !ProcApi.suppliers_().by[sid]) throw new Error('That supplier no longer exists.');
     var need = '';
     if (U.s(a.needBy)) { need = U.dateFromIso(a.needBy); if (!need) throw new Error('"Need by" date is not valid.'); }
     var id = U.newId(U.idSet(Db.readAll('requirements'), 'Req ID'));
     Db.append('requirements', [{
-      'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need, 'Supplier': sid, 'Status': 'Accepted',
+      'Req ID': id, 'Req Date': U.today(), 'Salesman': user.email, 'Need By': need,
       'Notes': U.s(a.notes), 'Item Code': raw, 'Item Description': desc, 'No. of Set': U.r4(sets)
     }]);
     return { id: id };

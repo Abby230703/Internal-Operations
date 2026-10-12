@@ -19,6 +19,14 @@
 .t td select.inp.sm.pw-sup{min-width:150px}
 .t td .inp.sm.pw-n{width:92px}
 
+/* Purchase queue: accepted but not ordered yet stands out */
+.t tr.pw-ready td{background:#F1FAF5;border-color:#BCE3CD}
+.t tr.pw-ready td:first-child{box-shadow:inset 5px 0 0 var(--ok)}
+.t tr.pw-ready.sel td{background:#E3F5EA}
+.pw-todo{color:var(--ok)!important;font-weight:700!important}
+.seg.chips-s .seg-b.pw-hot:not(.on){background:var(--ok-l);border-color:var(--ok);color:var(--ok)}
+.pw-banner{background:var(--ok-l);color:var(--ok);margin:10px 0 0}
+
 /* location chips (Stock, Put-away) */
 .pw-locs{display:flex;gap:6px;flex-wrap:wrap}
 .pw-chip{font:700 12px var(--sans);background:var(--indigo-l);color:var(--indigo-d);border-radius:99px;padding:3px 10px;white-space:nowrap}
